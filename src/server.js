@@ -16,6 +16,7 @@ import { readOfficialBoostStatus } from "./providers/boost-official.js";
 import { MemoryStore } from "./store.js";
 import { nextStageTarget } from "./core/stage-target.js";
 import { liquidityCandidates, liquidityQuoteAcceptable } from "./core/liquidity-sizing.js";
+import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timing.js";
 
 const root = join(fileURLToPath(new URL("..", import.meta.url)), "public");
 const store = new MemoryStore();
@@ -25,6 +26,66 @@ let officialSyncBusy = false;
 let marketPollBusy = false;
 let lastAiAnalysisAt = 0;
 let cachedAiPlan = null;
+let adaptiveTiming = {
+  marketPollMs: Math.max(15000, config.execution.marketPollMs),
+  decisionMs: Math.max(30000, config.execution.cycleMs),
+  aiAnalysisIntervalMs: Math.max(120000, config.execution.aiAnalysisIntervalMs)
+};
+let decisionTimer = null;
+let marketTimer = null;
+
+const publishAdaptiveTiming = (patch = {}) => {
+  const previous = store.read().adaptiveTiming || {};
+  store.update({
+    adaptiveTiming: {
+      ...previous,
+      enabled: config.execution.adaptiveTimingEnabled,
+      evaluationMs: config.execution.adaptiveEvaluationMs,
+      ...adaptiveTiming,
+      ...patch
+    }
+  });
+};
+
+function evaluateAndAdjustTiming() {
+  if (!config.execution.adaptiveTimingEnabled) return;
+  const now = Date.now();
+  const state = store.read();
+  const current = summarizeTradeWindow(state.trades, now - config.execution.adaptiveEvaluationMs, now);
+  const previous = summarizeTradeWindow(state.trades, now - 2 * config.execution.adaptiveEvaluationMs, now - config.execution.adaptiveEvaluationMs);
+  const result = chooseAdaptiveTiming({
+    current,
+    previous,
+    timing: adaptiveTiming,
+    maxHealthyCostBps: config.execution.maxRoundTripLossBps
+  });
+  adaptiveTiming = result.nextTiming;
+  const evaluatedAt = new Date(now).toISOString();
+  const evaluation = { evaluatedAt, ...result, current, previous };
+  publishAdaptiveTiming({
+    lastEvaluatedAt: evaluatedAt,
+    nextEvaluationAt: new Date(now + config.execution.adaptiveEvaluationMs).toISOString(),
+    lastResult: evaluation
+  });
+  store.update({ adaptiveEvaluations: [evaluation, ...(state.adaptiveEvaluations || [])].slice(0, 24) });
+  store.log(`Hourly timing evaluation: ${result.action}; volume $${current.volumeUsd.toFixed(2)} vs $${previous.volumeUsd.toFixed(2)}, cost ${current.costBps.toFixed(2)} bps`);
+}
+
+const scheduleDecisionCycle = () => {
+  clearTimeout(decisionTimer);
+  decisionTimer = setTimeout(async () => {
+    await autonomousCycle("timer");
+    scheduleDecisionCycle();
+  }, adaptiveTiming.decisionMs);
+};
+
+const scheduleMarketPoll = () => {
+  clearTimeout(marketTimer);
+  marketTimer = setTimeout(async () => {
+    await refreshMarketPrices("timer");
+    scheduleMarketPoll();
+  }, adaptiveTiming.marketPollMs);
+};
 
 async function syncOfficialBoost(trigger = "timer") {
   if (officialSyncBusy) return;
@@ -165,7 +226,7 @@ async function autonomousCycle(trigger = "timer") {
     const market = marketFromSnapshot(snapshot, state);
     let aiPlan = null;
     if (deepseek.configured) {
-      if (!cachedAiPlan || Date.now() - lastAiAnalysisAt >= config.execution.aiAnalysisIntervalMs) {
+      if (!cachedAiPlan || Date.now() - lastAiAnalysisAt >= adaptiveTiming.aiAnalysisIntervalMs) {
         try {
           cachedAiPlan = await deepseek.analyze({
             campaign: xLayerRwaCampaign,
@@ -400,10 +461,12 @@ server.listen(config.port, "127.0.0.1", () => {
     setImmediate(() => refreshMarketPrices("startup"));
   }
   setImmediate(() => syncOfficialBoost("startup"));
+  publishAdaptiveTiming({ nextEvaluationAt: new Date(Date.now() + config.execution.adaptiveEvaluationMs).toISOString() });
+  scheduleDecisionCycle();
+  scheduleMarketPoll();
 });
 
-setInterval(() => autonomousCycle("timer"), Math.max(60000, config.execution.cycleMs));
-setInterval(() => refreshMarketPrices("timer"), Math.max(15000, config.execution.marketPollMs));
 // OKX publishes leaderboard batches roughly every 10 minutes. Polling once a
 // minute catches the next published batch without pretending we can force it.
 setInterval(() => syncOfficialBoost("timer"), 60 * 1000);
+setInterval(() => evaluateAndAdjustTiming(), Math.max(60000, config.execution.adaptiveEvaluationMs));

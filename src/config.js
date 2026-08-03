@@ -23,6 +23,8 @@ export const config = Object.freeze({
     cycleMs: number("AUTONOMOUS_CYCLE_MS", 300000),
     marketPollMs: number("MARKET_POLL_MS", 30000),
     aiAnalysisIntervalMs: number("AI_ANALYSIS_INTERVAL_MS", 120000),
+    adaptiveTimingEnabled: bool("ADAPTIVE_TIMING_ENABLED", true),
+    adaptiveEvaluationMs: number("ADAPTIVE_EVALUATION_MS", 3600000),
     priceWindowSamples: number("PRICE_WINDOW_SAMPLES", 48),
     targetVolumeUsd: number("BOOST_TARGET_VOLUME_USD", 650),
     maxCampaignCostsUsd: number("MAX_CAMPAIGN_COSTS_USD", 10),
