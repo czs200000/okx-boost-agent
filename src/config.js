@@ -21,6 +21,9 @@ export const config = Object.freeze({
     autonomousEnabled: bool("AUTONOMOUS_ENABLED", false),
     attributionVerified: bool("BOOST_ATTRIBUTION_VERIFIED", false),
     cycleMs: number("AUTONOMOUS_CYCLE_MS", 300000),
+    marketPollMs: number("MARKET_POLL_MS", 30000),
+    aiAnalysisIntervalMs: number("AI_ANALYSIS_INTERVAL_MS", 120000),
+    priceWindowSamples: number("PRICE_WINDOW_SAMPLES", 48),
     targetVolumeUsd: number("BOOST_TARGET_VOLUME_USD", 650),
     maxCampaignCostsUsd: number("MAX_CAMPAIGN_COSTS_USD", 10),
     minSignalBps: number("MIN_SIGNAL_BPS", 18),
@@ -45,6 +48,7 @@ export const config = Object.freeze({
     maxTotalRwaExposurePct: number("MAX_TOTAL_RWA_EXPOSURE_PCT", 30),
     maxTokenPositionPct: number("MAX_TOKEN_POSITION_PCT", 10),
     maxSlippageBps: number("MAX_SLIPPAGE_BPS", 15),
+    minBroadcastIntervalMs: number("MIN_BROADCAST_INTERVAL_MS", 60000),
     dailyLossLimitPct: number("DAILY_LOSS_LIMIT_PCT", 2),
     maxTradesPerHour: number("MAX_TRADES_PER_HOUR", 6)
   }

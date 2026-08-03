@@ -34,6 +34,7 @@ const initialState = {
   priceHistory: {},
   pendingConfirmation: null,
   lastVolumeUpdatedAt: null,
+  lastBroadcastAt: null,
   lastDecision: null,
   logs: [
     { at: new Date().toISOString(), level: "info", message: `Workflow initialized in ${process.env.EXECUTION_MODE || "paper"} mode` }

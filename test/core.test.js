@@ -66,6 +66,20 @@ test("reaching the reference volume does not stop trading", () => {
   assert.equal(result.approved, true);
 });
 
+test("broadcast cooldown blocks a new entry but never delays an exit", () => {
+  const state = {
+    attributionVerified: true, campaignActive: true, dailyPnlUsd: 0,
+    tradesLastHour: 1, rwaExposurePct: 10, tokenPositionPct: 10,
+    tradingCostsUsd: 0, maxCampaignCostsUsd: 10,
+    lastBroadcastAt: new Date().toISOString()
+  };
+  const configured = { ...limits, minBroadcastIntervalMs: 60000 };
+  const buy = evaluateRisk({ action: "BUY", amountUsd: 20, maxSlippageBps: 10, reason: "entry" }, state, configured);
+  const exit = evaluateRisk({ action: "SELL", amountUsd: 20, maxSlippageBps: 10, reason: "Exit stop loss" }, state, configured);
+  assert.ok(buy.reasons.includes("broadcast_cooldown"));
+  assert.equal(exit.approved, true);
+});
+
 test("autonomous strategy exits a position at its stop loss", () => {
   const plan = autonomousPlan(
     { prices: { NVDAx: 99 }, wallet: { assets: [] } },

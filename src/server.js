@@ -11,7 +11,7 @@ import { AgenticWalletExecutor } from "./executors/agentic.js";
 import { xLayerRwaTokens } from "./providers/onchain-market.js";
 import { DeepSeekProvider } from "./providers/deepseek.js";
 import { readAgenticWalletStatus } from "./providers/agentic-wallet.js";
-import { readOnchainSnapshot } from "./providers/onchain-market.js";
+import { readMarketPrices, readOnchainSnapshot } from "./providers/onchain-market.js";
 import { readOfficialBoostStatus } from "./providers/boost-official.js";
 import { MemoryStore } from "./store.js";
 import { nextStageTarget } from "./core/stage-target.js";
@@ -22,6 +22,9 @@ const store = new MemoryStore();
 const deepseek = new DeepSeekProvider(config.deepseek);
 let cycleBusy = false;
 let officialSyncBusy = false;
+let marketPollBusy = false;
+let lastAiAnalysisAt = 0;
+let cachedAiPlan = null;
 
 async function syncOfficialBoost(trigger = "timer") {
   if (officialSyncBusy) return;
@@ -80,7 +83,7 @@ const recordPrices = snapshot => {
 
 const marketFromSnapshot = (snapshot, state) => ({
   tokens: Object.fromEntries(Object.entries(snapshot.prices || {}).map(([token, price]) => {
-    const history = (state.priceHistory[token] || []).slice(-12);
+    const history = (state.priceHistory[token] || []).slice(-config.execution.priceWindowSamples);
     const average = history.length ? history.reduce((sum, item) => sum + Number(item.price), 0) / history.length : Number(price);
     return [token, {
       price: Number(price),
@@ -90,6 +93,21 @@ const marketFromSnapshot = (snapshot, state) => ({
     }];
   }))
 });
+
+async function refreshMarketPrices(trigger = "timer") {
+  if (marketPollBusy) return;
+  marketPollBusy = true;
+  try {
+    const market = await readMarketPrices(true);
+    if (!Object.keys(market.prices || {}).length) throw new Error("No market prices returned");
+    recordPrices(market);
+    store.update({ marketPricesUpdatedAt: market.fetchedAt });
+  } catch (error) {
+    store.log(`Market monitor ${trigger} failed: ${error.message}`, "warn");
+  } finally {
+    marketPollBusy = false;
+  }
+}
 
 async function selectLiquidityAdjustedTrade(plan, snapshot, executor) {
   if (plan.action !== "BUY") {
@@ -119,7 +137,6 @@ async function autonomousCycle(trigger = "timer") {
   try {
     const [wallet, snapshot] = await Promise.all([readAgenticWalletStatus(), readOnchainSnapshot(true)]);
     if (!wallet.connected || !wallet.evmAddress) throw new Error("Agentic Wallet is disconnected");
-    recordPrices(snapshot);
     let state = store.read();
     const oneHourAgo = Date.now() - 3600000;
     const tradesLastHour = (state.trades || []).filter(item => new Date(item.at).getTime() >= oneHourAgo).length;
@@ -148,19 +165,23 @@ async function autonomousCycle(trigger = "timer") {
     const market = marketFromSnapshot(snapshot, state);
     let aiPlan = null;
     if (deepseek.configured) {
-      try {
-        aiPlan = await deepseek.analyze({
-          campaign: xLayerRwaCampaign,
-          market,
-          position: state.position,
-          progress: { volumeUsd: state.boostVolumeUsd, targetVolumeUsd: state.targetVolumeUsd },
-          attributionVerified: state.attributionVerified,
-          limits: config.risk,
-          instruction: "Analyze genuine low-cost mean-reversion opportunities. Do not recommend circular or artificial volume trades."
-        });
-      } catch (error) {
-        store.log(`DeepSeek cycle fallback: ${error.message}`, "warn");
+      if (!cachedAiPlan || Date.now() - lastAiAnalysisAt >= config.execution.aiAnalysisIntervalMs) {
+        try {
+          cachedAiPlan = await deepseek.analyze({
+            campaign: xLayerRwaCampaign,
+            market,
+            position: state.position,
+            progress: { volumeUsd: state.boostVolumeUsd, targetVolumeUsd: state.targetVolumeUsd },
+            attributionVerified: state.attributionVerified,
+            limits: config.risk,
+            instruction: "Analyze genuine low-cost mean-reversion opportunities. Do not recommend circular or artificial volume trades."
+          });
+          lastAiAnalysisAt = Date.now();
+        } catch (error) {
+          store.log(`DeepSeek cycle fallback: ${error.message}`, "warn");
+        }
       }
+      aiPlan = cachedAiPlan;
     }
     const plan = autonomousPlan(snapshot, state, {
       ...config.execution,
@@ -207,6 +228,7 @@ async function autonomousCycle(trigger = "timer") {
       trades,
       boostVolumeUsd: volume,
       lastVolumeUpdatedAt: trade.at,
+      lastBroadcastAt: trade.at,
       position: nextPosition,
       pendingConfirmation: null,
       tradingCostsUsd: state.tradingCostsUsd + cost,
@@ -370,12 +392,18 @@ server.listen(config.port, "127.0.0.1", () => {
   if (config.execution.autonomousEnabled && store.read().attributionVerified) {
     store.update({ running: true, mode: "agentic" });
     store.log("Autonomous Agentic Wallet execution enabled");
-    setImmediate(() => autonomousCycle("startup"));
+    setImmediate(async () => {
+      await refreshMarketPrices("startup");
+      await autonomousCycle("startup");
+    });
+  } else {
+    setImmediate(() => refreshMarketPrices("startup"));
   }
   setImmediate(() => syncOfficialBoost("startup"));
 });
 
 setInterval(() => autonomousCycle("timer"), Math.max(60000, config.execution.cycleMs));
+setInterval(() => refreshMarketPrices("timer"), Math.max(15000, config.execution.marketPollMs));
 // OKX publishes leaderboard batches roughly every 10 minutes. Polling once a
 // minute catches the next published batch without pretending we can force it.
 setInterval(() => syncOfficialBoost("timer"), 60 * 1000);

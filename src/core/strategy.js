@@ -45,7 +45,7 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
   }
 
   const candidates = symbols.map(token => {
-    const history = (state.priceHistory[token] || []).slice(-12);
+    const history = (state.priceHistory[token] || []).slice(-Number(settings.priceWindowSamples || 12));
     const current = Number(prices[token]);
     const average = history.length ? history.reduce((sum, item) => sum + Number(item.price), 0) / history.length : current;
     return { token, current, deviationBps: average > 0 ? ((current / average) - 1) * 10000 : 0, samples: history.length };

@@ -104,6 +104,7 @@ function render(payload) {
     ["最大滑点", `${risk.maxSlippageBps} bps`],
     ["每日止损", risk.dailyLossLimitPct > 0 ? `${risk.dailyLossLimitPct}%` : "已关闭"],
     ["每小时交易", risk.maxTradesPerHour > 0 ? `${risk.maxTradesPerHour} 笔` : "不限"],
+    ["最短广播间隔", `${Math.round((risk.minBroadcastIntervalMs || 0) / 1000)} 秒`],
     ["归因失败", "自动熔断"]
   ].map(([key, value]) => `<div><dt>${key}</dt><dd>${value}</dd></div>`).join("");
   el("logs").innerHTML = state.logs.map(item => `<div class="log"><time>${new Date(item.at).toLocaleTimeString()}</time><span class="${item.level}">${item.level}</span><div>${item.message}</div></div>`).join("");

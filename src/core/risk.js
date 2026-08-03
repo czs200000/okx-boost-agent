@@ -9,6 +9,10 @@ export function evaluateRisk(plan, state, limits) {
   if (slippage > limits.maxSlippageBps) reasons.push("max_slippage_exceeded");
   if (limits.dailyLossLimitPct > 0 && state.dailyPnlUsd <= -(limits.totalCapitalUsd * limits.dailyLossLimitPct / 100)) reasons.push("daily_loss_limit");
   if (limits.maxTradesPerHour > 0 && state.tradesLastHour >= limits.maxTradesPerHour) reasons.push("hourly_trade_limit");
+  const broadcastCooldownMs = Math.max(0, Number(limits.minBroadcastIntervalMs || 0));
+  const lastBroadcastAt = state.lastBroadcastAt ? new Date(state.lastBroadcastAt).getTime() : 0;
+  const isExit = plan.action === "SELL" && /stop|Exit/i.test(plan.reason || "");
+  if (plan.action !== "HOLD" && !isExit && broadcastCooldownMs > 0 && lastBroadcastAt > 0 && Date.now() - lastBroadcastAt < broadcastCooldownMs) reasons.push("broadcast_cooldown");
   if (state.rwaExposurePct >= limits.maxTotalRwaExposurePct && plan.action === "BUY") reasons.push("rwa_exposure_limit");
   if (state.tokenPositionPct >= limits.maxTokenPositionPct && plan.action === "BUY") reasons.push("token_position_limit");
   if (state.tradingCostsUsd >= state.maxCampaignCostsUsd) reasons.push("campaign_cost_limit");

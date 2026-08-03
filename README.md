@@ -77,6 +77,7 @@ Restart the service after changing `.env`.
 ## Strategy summary
 
 - Samples market prices every autonomous cycle.
+- Monitors market prices every 30 seconds by default, evaluates the strategy every 60 seconds, and refreshes AI analysis every 120 seconds.
 - Requires a configurable discount below the rolling mean before buying.
 - Holds one primary competition-token position at a time.
 - Exits on take-profit, stop-loss, or maximum holding time.
