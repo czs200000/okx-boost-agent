@@ -12,6 +12,14 @@ test("summarizes volume and unit cost inside a time window", () => {
   assert.deepEqual(summary, { trades: 1, volumeUsd: 100, costUsd: 0.1, costBps: 10 });
 });
 
+test("prefers realized cash loss over fee-only expected cost", () => {
+  const summary = summarizeTradeWindow([
+    { at: "2026-08-04T01:30:00Z", amountUsd: 100, actualLossUsd: 0.5, economics: { expectedCostUsd: 0.01 } }
+  ], Date.parse("2026-08-04T01:00:00Z"), Date.parse("2026-08-04T02:00:00Z"));
+  assert.equal(summary.costUsd, 0.5);
+  assert.equal(summary.costBps, 50);
+});
+
 test("keeps timing when volume improves with healthy cost", () => {
   const result = chooseAdaptiveTiming({ current: { trades: 4, volumeUsd: 500, costBps: 4 }, previous: { trades: 3, volumeUsd: 400, costBps: 5 }, timing });
   assert.equal(result.action, "keep");

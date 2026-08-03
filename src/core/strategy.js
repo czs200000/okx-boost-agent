@@ -33,12 +33,17 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
     const moveBps = ((price / position.entryPrice) - 1) * 10000;
     const ageMinutes = (now - new Date(position.openedAt).getTime()) / 60000;
     if (moveBps >= settings.takeProfitBps || moveBps <= -settings.stopLossBps || ageMinutes >= settings.maxPositionMinutes) {
+      const exitReason = moveBps >= settings.takeProfitBps
+        ? "Take profit probe"
+        : moveBps <= -settings.stopLossBps
+          ? "Stop loss"
+          : "Max hold";
       return {
         action: "SELL", token: position.token, quoteToken: "USDT",
         amountUsd: Math.min(position.amount * price, settings.tradeUsd),
         maxSlippageBps: settings.maxSlippageBps, confidence: 0.8,
         expectedEdgeBps: Math.max(0, Math.abs(moveBps)),
-        reason: `Exit ${position.token}: ${moveBps.toFixed(1)} bps, ${ageMinutes.toFixed(0)} min`
+        reason: `${exitReason} ${position.token}: ${moveBps.toFixed(1)} bps, ${ageMinutes.toFixed(0)} min`
       };
     }
     return { action: "HOLD", token: position.token, quoteToken: "USDT", amountUsd: 0, maxSlippageBps: 0, confidence: 0.7, reason: `Position ${moveBps.toFixed(1)} bps from entry` };

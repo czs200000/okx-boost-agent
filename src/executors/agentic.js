@@ -88,8 +88,10 @@ export class AgenticWalletExecutor {
       status: "BROADCAST",
       txHash: data.swapTxHash,
       approveTxHash: data.approveTxHash || null,
-      fromAmount: data.fromAmount || quote.fromAmount,
-      toAmount: data.toAmount || quote.toAmount,
+      // CLI execution amounts may be returned in base units. The immediately
+      // preceding quote is already decimal-normalized and is safe for state.
+      fromAmount: quote.fromAmount,
+      toAmount: quote.toAmount,
       priceImpactPct: Number(data.priceImpact || quote.priceImpactPct),
       nextSteps: data.nextSteps || null
     };

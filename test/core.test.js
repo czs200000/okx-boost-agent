@@ -87,6 +87,7 @@ test("autonomous strategy exits a position at its stop loss", () => {
     { tradeUsd: 15, maxSlippageBps: 15, takeProfitBps: 22, stopLossBps: 35, maxPositionMinutes: 45, minSignalBps: 18 }
   );
   assert.equal(plan.action, "SELL");
+  assert.match(plan.reason, /Stop loss/);
 });
 
 test("autonomous strategy waits for enough price history", () => {
@@ -116,6 +117,16 @@ test("reward-adjusted economics rejects expensive volume", () => {
     { maxExecutionCostBps: 150, maxEffectiveCostBps: 5, maxRewardSubsidyBps: 150, minNetEdgeBps: 1 }
   );
   assert.equal(result.approved, false);
+});
+
+test("risk exits are never trapped by the profit economics gate", () => {
+  const result = assessTradeEconomics(
+    { action: "SELL", amountUsd: 330, expectedEdgeBps: 35, reason: "Stop loss SPCXx" },
+    { priceImpactPct: 0.08, tradeFeeUsd: 0.001 },
+    { targetVolumeUsd: 8000, boostVolumeUsd: 6500, maxCampaignCostsUsd: 10, tradingCostsUsd: 9.9 },
+    { maxExecutionCostBps: 5, maxEffectiveCostBps: 1, maxRewardSubsidyBps: 0, minNetEdgeBps: 1 }
+  );
+  assert.equal(result.approved, true);
 });
 
 test("favorable price impact never creates negative trading cost", () => {

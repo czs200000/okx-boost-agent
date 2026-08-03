@@ -186,10 +186,11 @@ async function selectLiquidityAdjustedTrade(plan, snapshot, executor) {
     const sizedPlan = { ...plan, amountUsd };
     const liquidity = await executor.quoteRoundTrip(sizedPlan, snapshot);
     last = { plan: sizedPlan, quote: liquidity.outbound, liquidity };
-    if (liquidityQuoteAcceptable(liquidity, config.execution.maxRoundTripLossBps)) return last;
+    const edgeCoversRoundTrip = Number(plan.expectedEdgeBps || 0) >= Number(liquidity.roundTripLossBps) + config.execution.minNetEntryBps;
+    if (liquidityQuoteAcceptable(liquidity, config.execution.maxRoundTripLossBps) && edgeCoversRoundTrip) return last;
   }
   const loss = Number(last?.liquidity?.roundTripLossBps);
-  throw new Error(`No near-zero-loss size available; best tested round-trip loss ${Number.isFinite(loss) ? loss.toFixed(2) : "unknown"} bps`);
+  throw new Error(`No positive-edge size available; best tested round-trip loss ${Number.isFinite(loss) ? loss.toFixed(2) : "unknown"} bps`);
 }
 
 async function autonomousCycle(trigger = "timer") {
@@ -213,6 +214,25 @@ async function autonomousCycle(trigger = "timer") {
       tokenPositionPct: snapshot.wallet.totalValueUsd > 0 ? (largestRwaValueUsd / snapshot.wallet.totalValueUsd) * 100 : 0
     });
     state = store.read();
+    if (state.position) {
+      const positionAddress = xLayerRwaTokens[state.position.token];
+      const heldAsset = snapshot.wallet.assets.find(asset => asset.tokenAddress?.toLowerCase() === positionAddress);
+      const walletAmount = Number(heldAsset?.balance || 0);
+      const matchingEntry = (state.trades || []).find(trade => trade.action === "BUY" && trade.token === state.position.token && trade.at === state.position.openedAt);
+      const reconciled = {
+        ...state.position,
+        ...(walletAmount > 0 ? { amount: walletAmount } : {}),
+        ...(!state.position.entryCostUsd && matchingEntry ? {
+          entryCostUsd: Number(matchingEntry.quote?.fromAmount || matchingEntry.amountUsd),
+          entryRoundTripLossBps: Number(matchingEntry.liquidity?.roundTripLossBps || 0)
+        } : {})
+      };
+      if (JSON.stringify(reconciled) !== JSON.stringify(state.position)) {
+        store.update({ position: reconciled });
+        state = store.read();
+        store.log(`Reconciled ${state.position.token} position from wallet and entry record`);
+      }
+    }
     if (!state.position) {
       const existing = snapshot.wallet.assets
         .filter(asset => Object.values(xLayerRwaTokens).includes(asset.tokenAddress?.toLowerCase()) && Number(asset.usdValue) >= 1)
@@ -262,6 +282,19 @@ async function autonomousCycle(trigger = "timer") {
     const executionPlan = sized.plan;
     const quote = sized.quote;
     const economics = assessTradeEconomics(executionPlan, quote, state, config.execution);
+    if (executionPlan.action === "SELL" && state.position?.entryCostUsd > 0) {
+      const exitProceedsUsd = Number(quote.toAmount || 0);
+      const cashPnlUsd = exitProceedsUsd - Number(state.position.entryCostUsd);
+      const netExitBps = cashPnlUsd / Number(state.position.entryCostUsd) * 10000;
+      economics.exitProceedsUsd = exitProceedsUsd;
+      economics.cashPnlUsd = cashPnlUsd;
+      economics.netExitBps = netExitBps;
+      const forcedExit = /stop loss|max hold/i.test(executionPlan.reason || "");
+      if (!forcedExit && netExitBps < config.execution.minNetExitBps) {
+        economics.approved = false;
+        economics.reason = `net exit ${netExitBps.toFixed(2)} bps below ${config.execution.minNetExitBps.toFixed(2)} bps target`;
+      }
+    }
     store.update({ lastDecision: { ...decision, plan: executionPlan, economics, liquidity: sized.liquidity } });
     store.log(`Quote ${quote.fromAmount} ${quote.fromSymbol} → ${quote.toAmount} ${quote.toSymbol}; cost ${economics.costBps.toFixed(2)} bps`);
     if (!economics.approved) {
@@ -274,16 +307,17 @@ async function autonomousCycle(trigger = "timer") {
       store.log(`Wallet confirmation required: ${execution.message}`, "warn");
       return;
     }
-    const trade = { at: new Date().toISOString(), ...executionPlan, ...execution, quote, economics, liquidity: sized.liquidity, aiPlan };
+    const cashPnlUsd = executionPlan.action === "SELL" && state.position?.entryCostUsd > 0
+      ? Number(quote.toAmount || 0) - Number(state.position.entryCostUsd)
+      : null;
+    const trade = { at: new Date().toISOString(), ...executionPlan, ...execution, quote, economics, liquidity: sized.liquidity, aiPlan, cashPnlUsd, actualLossUsd: cashPnlUsd == null ? null : Math.max(0, -cashPnlUsd) };
     const trades = [trade, ...(state.trades || [])].slice(0, 500);
     const volume = state.boostVolumeUsd + Number(executionPlan.amountUsd);
     const cost = Number(economics.expectedCostUsd || 0);
     let realizedPnlUsd = state.realizedPnlUsd;
-    if (executionPlan.action === "SELL" && state.position) {
-      realizedPnlUsd += (Number(snapshot.prices[executionPlan.token]) - Number(state.position.entryPrice)) * Number(quote.fromAmount);
-    }
+    if (cashPnlUsd != null) realizedPnlUsd += cashPnlUsd;
     const nextPosition = executionPlan.action === "BUY"
-      ? { token: executionPlan.token, amount: Number(execution.toAmount || quote.toAmount), entryPrice: Number(snapshot.prices[executionPlan.token]), openedAt: trade.at }
+      ? { token: executionPlan.token, amount: Number(quote.toAmount), entryPrice: Number(snapshot.prices[executionPlan.token]), entryCostUsd: Number(quote.fromAmount), entryRoundTripLossBps: Number(sized.liquidity?.roundTripLossBps), openedAt: trade.at }
       : null;
     store.update({
       trades,
@@ -292,9 +326,9 @@ async function autonomousCycle(trigger = "timer") {
       lastBroadcastAt: trade.at,
       position: nextPosition,
       pendingConfirmation: null,
-      tradingCostsUsd: state.tradingCostsUsd + cost,
+      tradingCostsUsd: state.tradingCostsUsd + (cashPnlUsd == null ? 0 : Math.max(0, -cashPnlUsd)),
       realizedPnlUsd,
-      dailyPnlUsd: realizedPnlUsd - (state.tradingCostsUsd + cost),
+      dailyPnlUsd: realizedPnlUsd,
       tradesLastHour: tradesLastHour + 1
     });
     store.log(`Broadcast ${executionPlan.action} ${executionPlan.token} $${Number(executionPlan.amountUsd).toFixed(2)} — ${execution.txHash || "transaction submitted"}`);

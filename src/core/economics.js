@@ -14,10 +14,12 @@ export function assessTradeEconomics(plan, quote, state, settings) {
   const requiredEdgeBps = Math.max(0, costBps - rewardSubsidyBps + Number(settings.minNetEdgeBps));
   const effectiveCostBps = Math.max(0, costBps - rewardSubsidyBps);
   const isRiskExit = plan.action === "SELL" && /stop|Exit/i.test(plan.reason || "");
-  const approved = costBps <= Number(settings.maxExecutionCostBps)
+  const approved = isRiskExit || (
+    costBps <= Number(settings.maxExecutionCostBps)
     && effectiveCostBps <= Number(settings.maxEffectiveCostBps)
-    && (isRiskExit || expectedEdgeBps >= requiredEdgeBps)
-    && expectedCostUsd <= remainingBudgetUsd;
+    && expectedEdgeBps >= requiredEdgeBps
+    && expectedCostUsd <= remainingBudgetUsd
+  );
   return {
     approved,
     expectedCostUsd,

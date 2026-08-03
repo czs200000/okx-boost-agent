@@ -37,6 +37,8 @@ export const config = Object.freeze({
     maxRewardSubsidyBps: number("MAX_REWARD_SUBSIDY_BPS", 150),
     minNetEdgeBps: number("MIN_NET_EDGE_BPS", 1),
     maxRoundTripLossBps: number("MAX_ROUND_TRIP_LOSS_BPS", 15),
+    minNetEntryBps: number("MIN_NET_ENTRY_BPS", 3),
+    minNetExitBps: number("MIN_NET_EXIT_BPS", 2),
     minDynamicTradeUsd: number("MIN_DYNAMIC_TRADE_USD", 50),
     tokenTradeCapsUsd: Object.freeze({
       NVDAx: number("MAX_TRADE_NVDA_USD", 330),

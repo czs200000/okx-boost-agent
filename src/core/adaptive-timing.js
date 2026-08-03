@@ -6,7 +6,10 @@ export function summarizeTradeWindow(trades, fromMs, toMs) {
     return Number.isFinite(at) && at >= fromMs && at < toMs;
   });
   const volumeUsd = selected.reduce((sum, trade) => sum + Number(trade.amountUsd || 0), 0);
-  const costUsd = selected.reduce((sum, trade) => sum + Math.max(0, Number(trade.economics?.expectedCostUsd || 0)), 0);
+  const costUsd = selected.reduce((sum, trade) => {
+    if (Number.isFinite(Number(trade.actualLossUsd))) return sum + Math.max(0, Number(trade.actualLossUsd));
+    return sum + Math.max(0, Number(trade.economics?.expectedCostUsd || 0));
+  }, 0);
   return {
     trades: selected.length,
     volumeUsd,
