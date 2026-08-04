@@ -31,6 +31,7 @@ const initialState = {
   tradesLastHour: 0,
   trades: [],
   position: null,
+  positions: {},
   priceHistory: {},
   executableQuoteHistory: {},
   marketPricesUpdatedAt: null,
@@ -58,6 +59,10 @@ export class MemoryStore {
     // an older persisted state silently keeps the previous ceiling forever.
     this.state.maxCampaignCostsUsd = Number(process.env.MAX_CAMPAIGN_COSTS_USD || this.state.maxCampaignCostsUsd || 10);
     this.state.tradingCostsUsd = Math.max(0, Number(this.state.tradingCostsUsd || 0));
+    if (!Object.keys(this.state.positions || {}).length && this.state.position?.token) {
+      this.state.positions = { [this.state.position.token]: this.state.position };
+    }
+    this.state.position = Object.values(this.state.positions || {})[0] || null;
     this.persist();
   }
 

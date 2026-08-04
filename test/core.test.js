@@ -93,15 +93,34 @@ test("broadcast cooldown blocks a new entry but never delays an exit", () => {
   assert.equal(exit.approved, true);
 });
 
-test("autonomous strategy always probes a held position with an executable exit quote", () => {
+test("autonomous strategy exits a profitable position using its executable quote", () => {
   const plan = autonomousPlan(
     { prices: { NVDAx: 99 }, wallet: { assets: [] } },
-    { position: { token: "NVDAx", amount: 0.1, entryPrice: 100, entryCostUsd: 150, openedAt: new Date().toISOString() } },
-    { tradeUsd: 15, maxSlippageBps: 15, takeProfitBps: 22, stopLossBps: 35, maxPositionMinutes: 45, minSignalBps: 18 }
+    {
+      positions: { NVDAx: { token: "NVDAx", amount: 0.1, entryCostUsd: 150, openedAt: new Date().toISOString() } },
+      executableExitQuotes: { NVDAx: { exitProceedsUsd: 150.04, netExitBps: 2.67 } }
+    },
+    { tradeUsd: 150, maxSlippageBps: 15, minNetExitBps: 2 }
   );
   assert.equal(plan.action, "SELL");
   assert.equal(plan.amountUsd, 150);
-  assert.match(plan.reason, /Executable exit probe/);
+  assert.match(plan.reason, /Executable profitable exit/);
+});
+
+test("a losing position is held while another token can open", () => {
+  const plan = autonomousPlan(
+    { prices: {}, wallet: { assets: [] } },
+    {
+      positions: { NVDAx: { token: "NVDAx", amount: 0.7, entryCostUsd: 150 } },
+      executableExitQuotes: { NVDAx: { exitProceedsUsd: 149.9, netExitBps: -6.67 } },
+      executableQuoteHistory: { SNDKx: [
+        { askUnitUsd: 100, bidUnitUsd: 99.4 }, { askUnitUsd: 100, bidUnitUsd: 99.4 }, { askUnitUsd: 99.5, bidUnitUsd: 99.4 }
+      ] }
+    },
+    { tradeUsd: 150, tokenTradeCapsUsd: { NVDAx: 150, SNDKx: 50 }, maxSlippageBps: 15, minNetExitBps: 2, executableQuoteMinSamples: 3, sndkEntrySignalBps: 30, maxEntryDowntrendBps: 5 }
+  );
+  assert.equal(plan.action, "BUY");
+  assert.equal(plan.token, "SNDKx");
 });
 
 test("autonomous strategy waits for enough executable quote history", () => {

@@ -25,14 +25,21 @@ export function deterministicPlan(market, limits) {
 
 export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
   const now = Date.now();
-  const position = state.position;
-  if (position) {
+  const positions = state.positions || (state.position?.token ? { [state.position.token]: state.position } : {});
+  const exitCandidates = Object.values(positions).map(position => {
+    const exit = state.executableExitQuotes?.[position.token];
+    return { position, exit, netExitBps: Number(exit?.netExitBps) };
+  }).filter(item => Number.isFinite(item.netExitBps) && item.netExitBps >= Number(settings.minNetExitBps || 0))
+    .sort((a, b) => b.netExitBps - a.netExitBps);
+  const readyExit = exitCandidates[0];
+  if (readyExit) {
+    const { position, netExitBps } = readyExit;
     return {
       action: "SELL", token: position.token, quoteToken: "USDT",
       amountUsd: Number(position.entryCostUsd || settings.tradeUsd),
       maxSlippageBps: settings.maxSlippageBps, confidence: 0.9,
-      expectedEdgeBps: 0,
-      reason: `Executable exit probe ${position.token}`
+      expectedEdgeBps: netExitBps,
+      reason: `Executable profitable exit ${position.token}: ${netExitBps.toFixed(2)} bps`
     };
   }
 
@@ -63,6 +70,7 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
       && item.samples >= Number(settings.executableQuoteMinSamples || 3)
       && item.bidTrendBps >= -Number(settings.maxEntryDowntrendBps ?? 5)
       && item.deviationBps <= -item.signalBps
+      && !positions[item.token]
       && !tokenCoolingDown(item.token))
     .sort((a, b) => a.deviationBps - b.deviationBps);
   const best = candidates[0];

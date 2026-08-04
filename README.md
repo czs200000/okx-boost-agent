@@ -8,7 +8,7 @@ A local-first dashboard that combines deterministic trading logic, optional Deep
 
 - Safe paper-mode defaults; real execution is opt-in.
 - Optional DeepSeek advisor with deterministic local controls as the final authority.
-- Single-position mean-reversion strategy for NVDAx, SNDKx, and SPCXx.
+- Independent per-token positions driven by executable X Layer quotes.
 - Liquidity-aware sizing with two-sided quote checks and configurable round-trip-loss limits.
 - Slippage, exposure, frequency, loss, and campaign-cost controls.
 - Automatic pause on OKX `warn`, `block`, or wallet-confirmation responses.
@@ -76,11 +76,11 @@ Restart the service after changing `.env`.
 
 ## Strategy summary
 
-- Samples market prices every autonomous cycle.
-- Monitors market prices every 30 seconds by default, evaluates the strategy every 60 seconds, and refreshes AI analysis every 120 seconds.
-- Requires a configurable discount below the rolling mean before buying.
-- Holds one primary competition-token position at a time.
-- Exits on take-profit, stop-loss, or maximum holding time.
+- Samples executable buy and immediate-return quotes every autonomous cycle.
+- Monitors held positions and evaluates the strategy independently for each enabled token.
+- Requires a configurable executable-ask discount before buying.
+- Holds separate positions per token, so one underwater position does not block another token.
+- Exits only when the fresh executable proceeds exceed that token's recorded entry cost and configured net-profit buffer.
 - Tests descending notional sizes against outbound and immediate return quotes.
 - Executes only when route classifications and configured cost limits pass.
 - Treats a near-zero-loss quote as an objective, never a guarantee.
@@ -90,7 +90,7 @@ Restart the service after changing `.env`.
 All runtime settings are documented in [.env.example](.env.example). Important groups include:
 
 - `AUTONOMOUS_*`: execution enablement and cycle timing
-- `MIN_SIGNAL_BPS`, `TAKE_PROFIT_BPS`, `STOP_LOSS_BPS`: strategy thresholds
+- `NVDA_ENTRY_SIGNAL_BPS`, `SNDK_ENTRY_SIGNAL_BPS`, `MIN_NET_EXIT_BPS`: executable-quote strategy thresholds
 - `MAX_TRADE_*`: global and token-specific notional caps
 - `MAX_ROUND_TRIP_LOSS_BPS`: two-sided quote loss ceiling
 - `MAX_SLIPPAGE_BPS`: execution slippage ceiling
@@ -123,7 +123,7 @@ The tests cover strategy decisions, risk gates, liquidity sizing, economics, Boo
 - The Boost integration uses campaign-specific public web endpoints that may change.
 - Official leaderboard updates can lag local transaction broadcasts.
 - Agentic Wallet execution depends on the currently authenticated local account.
-- The current strategy is single-account and single-position; it is not safe to switch active accounts while running.
+- The current strategy is single-account with one independent aggregate position per enabled token; it is not safe to switch active accounts while running.
 - No strategy can guarantee profit, zero loss, leaderboard eligibility, or rewards.
 
 ## Security
