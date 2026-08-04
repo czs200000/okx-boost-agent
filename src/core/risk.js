@@ -15,7 +15,7 @@ export function evaluateRisk(plan, state, limits) {
   if (plan.action !== "HOLD" && !isExit && broadcastCooldownMs > 0 && lastBroadcastAt > 0 && Date.now() - lastBroadcastAt < broadcastCooldownMs) reasons.push("broadcast_cooldown");
   if (state.rwaExposurePct >= limits.maxTotalRwaExposurePct && plan.action === "BUY") reasons.push("rwa_exposure_limit");
   if (state.tokenPositionPct >= limits.maxTokenPositionPct && plan.action === "BUY") reasons.push("token_position_limit");
-  if (state.tradingCostsUsd >= state.maxCampaignCostsUsd) reasons.push("campaign_cost_limit");
+  if (plan.action === "BUY" && state.tradingCostsUsd >= state.maxCampaignCostsUsd) reasons.push("campaign_cost_limit");
   if (!state.attributionVerified) reasons.push("campaign_attribution_unverified");
   if (!state.campaignActive) reasons.push("campaign_inactive");
 

@@ -32,12 +32,20 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
     const price = Number(prices[position.token]);
     const moveBps = ((price / position.entryPrice) - 1) * 10000;
     const ageMinutes = (now - new Date(position.openedAt).getTime()) / 60000;
-    if (moveBps >= settings.takeProfitBps || moveBps <= -settings.stopLossBps || ageMinutes >= settings.maxPositionMinutes) {
-      const exitReason = moveBps >= settings.takeProfitBps
-        ? "Take profit probe"
-        : moveBps <= -settings.stopLossBps
-          ? "Stop loss"
-          : "Breakeven probe";
+    const hardStopBps = Number(settings.hardStopLossBps ?? settings.stopLossBps);
+    const recoveryTimeoutMinutes = Number(settings.recoveryMaxMinutes ?? 30);
+    const shouldProbe = moveBps >= settings.takeProfitBps
+      || moveBps <= -settings.stopLossBps
+      || ageMinutes >= settings.maxPositionMinutes;
+    const mustExit = moveBps <= -hardStopBps || ageMinutes >= recoveryTimeoutMinutes;
+    if (shouldProbe || mustExit) {
+      const exitReason = moveBps <= -hardStopBps
+        ? "Hard stop loss"
+        : ageMinutes >= recoveryTimeoutMinutes
+          ? "Recovery timeout"
+          : moveBps >= settings.takeProfitBps
+            ? "Take profit probe"
+            : "Recovery probe";
       return {
         action: "SELL", token: position.token, quoteToken: "USDT",
         amountUsd: Math.min(position.amount * price, settings.tradeUsd),
@@ -49,6 +57,17 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
     return { action: "HOLD", token: position.token, quoteToken: "USDT", amountUsd: 0, maxSlippageBps: 0, confidence: 0.7, reason: `Position ${moveBps.toFixed(1)} bps from entry` };
   }
 
+  const tokenCoolingDown = token => {
+    const closes = (state.trades || []).filter(trade => trade.token === token && trade.action === "SELL" && Number.isFinite(Number(trade.cashPnlUsd)));
+    let streak = 0;
+    for (const trade of closes) {
+      if (Number(trade.cashPnlUsd) < 0) streak += 1;
+      else break;
+    }
+    if (streak < Number(settings.tokenLossStreakLimit ?? 2)) return false;
+    const lastCloseAt = new Date(closes[0]?.at || 0).getTime();
+    return now - lastCloseAt < Number(settings.tokenCooldownMinutes ?? 60) * 60000;
+  };
   const candidates = symbols.map(token => {
     const history = (state.priceHistory[token] || []).slice(-Number(settings.priceWindowSamples || 12));
     const current = Number(prices[token]);
@@ -56,7 +75,7 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
     const trendAnchor = Number(history[Math.max(0, history.length - 4)]?.price || current);
     const recentTrendBps = trendAnchor > 0 ? ((current / trendAnchor) - 1) * 10000 : 0;
     return { token, current, deviationBps: average > 0 ? ((current / average) - 1) * 10000 : 0, recentTrendBps, samples: history.length };
-  }).filter(item => item.current > 0 && item.samples >= 3 && item.recentTrendBps >= -Number(settings.maxEntryDowntrendBps ?? 5))
+  }).filter(item => item.current > 0 && item.samples >= 3 && item.recentTrendBps >= -Number(settings.maxEntryDowntrendBps ?? 5) && !tokenCoolingDown(item.token))
     .sort((a, b) => a.deviationBps - b.deviationBps);
   const best = candidates[0];
   if (!best || best.deviationBps > -settings.minSignalBps) {

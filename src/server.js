@@ -195,7 +195,7 @@ async function selectLiquidityAdjustedTrade(plan, snapshot, executor) {
   for (const amountUsd of candidates) {
     const sizedPlan = { ...plan, amountUsd };
     const liquidity = await executor.quoteRoundTrip(sizedPlan, snapshot);
-    const projectedLossUsd = projectedWorstLossUsd(amountUsd, liquidity.roundTripLossBps, config.execution.stopLossBps);
+    const projectedLossUsd = projectedWorstLossUsd(amountUsd, liquidity.roundTripLossBps, config.execution.hardStopLossBps);
     liquidity.projectedWorstLossUsd = projectedLossUsd;
     last = { plan: sizedPlan, quote: liquidity.outbound, liquidity };
     const edgeCoversRoundTrip = Number(plan.expectedEdgeBps || 0) >= Number(liquidity.roundTripLossBps) + config.execution.minNetEntryBps;
@@ -302,8 +302,12 @@ async function autonomousCycle(trigger = "timer") {
       economics.exitProceedsUsd = exitProceedsUsd;
       economics.cashPnlUsd = cashPnlUsd;
       economics.netExitBps = netExitBps;
-      const forcedExit = /stop loss|max hold/i.test(executionPlan.reason || "");
-      if (!forcedExit && netExitBps < config.execution.minNetExitBps) {
+      const forcedExit = /hard stop loss|recovery timeout/i.test(executionPlan.reason || "");
+      const dollarStop = -cashPnlUsd >= config.execution.maxProjectedLossPerTradeUsd;
+      if (forcedExit || dollarStop) {
+        economics.approved = true;
+        economics.reason = dollarStop ? "dollar loss ceiling reached" : "risk exit required";
+      } else if (netExitBps < config.execution.minNetExitBps) {
         economics.approved = false;
         economics.reason = `net exit ${netExitBps.toFixed(2)} bps below ${config.execution.minNetExitBps.toFixed(2)} bps target`;
       }

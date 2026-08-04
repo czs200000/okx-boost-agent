@@ -66,6 +66,19 @@ test("reaching the reference volume does not stop trading", () => {
   assert.equal(result.approved, true);
 });
 
+test("campaign loss budget blocks new entries but never traps exits", () => {
+  const state = {
+    attributionVerified: true, campaignActive: true, dailyPnlUsd: -20,
+    tradesLastHour: 10, rwaExposurePct: 10, tokenPositionPct: 10,
+    tradingCostsUsd: 20, maxCampaignCostsUsd: 20
+  };
+  const configured = { ...limits, maxTradeUsd: 150, dailyLossLimitPct: 0, maxTradesPerHour: 0, maxTokenPositionPct: 80 };
+  const buy = evaluateRisk({ action: "BUY", amountUsd: 150, maxSlippageBps: 10 }, state, configured);
+  const sell = evaluateRisk({ action: "SELL", amountUsd: 150, maxSlippageBps: 10, reason: "Hard stop loss" }, state, configured);
+  assert.ok(buy.reasons.includes("campaign_cost_limit"));
+  assert.equal(sell.approved, true);
+});
+
 test("broadcast cooldown blocks a new entry but never delays an exit", () => {
   const state = {
     attributionVerified: true, campaignActive: true, dailyPnlUsd: 0,
@@ -87,7 +100,7 @@ test("autonomous strategy exits a position at its stop loss", () => {
     { tradeUsd: 15, maxSlippageBps: 15, takeProfitBps: 22, stopLossBps: 35, maxPositionMinutes: 45, minSignalBps: 18 }
   );
   assert.equal(plan.action, "SELL");
-  assert.match(plan.reason, /Stop loss/);
+  assert.match(plan.reason, /Hard stop loss/);
 });
 
 test("autonomous strategy waits for enough price history", () => {
@@ -115,7 +128,7 @@ test("expired positions become breakeven probes instead of forced exits", () => 
     { tradeUsd: 50, maxSlippageBps: 15, takeProfitBps: 10, stopLossBps: 20, maxPositionMinutes: 10, minSignalBps: 5 }
   );
   assert.equal(plan.action, "SELL");
-  assert.match(plan.reason, /Breakeven probe/);
+  assert.match(plan.reason, /Recovery probe/);
 });
 
 test("reward-adjusted economics accepts a low-cost genuine edge", () => {
@@ -140,12 +153,39 @@ test("reward-adjusted economics rejects expensive volume", () => {
 
 test("risk exits are never trapped by the profit economics gate", () => {
   const result = assessTradeEconomics(
-    { action: "SELL", amountUsd: 330, expectedEdgeBps: 35, reason: "Stop loss SPCXx" },
+    { action: "SELL", amountUsd: 330, expectedEdgeBps: 35, reason: "Hard stop loss SPCXx" },
     { priceImpactPct: 0.08, tradeFeeUsd: 0.001 },
     { targetVolumeUsd: 8000, boostVolumeUsd: 6500, maxCampaignCostsUsd: 10, tradingCostsUsd: 9.9 },
     { maxExecutionCostBps: 5, maxEffectiveCostBps: 1, maxRewardSubsidyBps: 0, minNetEdgeBps: 1 }
   );
   assert.equal(result.approved, true);
+});
+
+test("soft stops probe for recovery instead of forcing an exit", () => {
+  const plan = autonomousPlan(
+    { prices: { NVDAx: 99.75 }, wallet: { assets: [] } },
+    { position: { token: "NVDAx", amount: 1, entryPrice: 100, openedAt: new Date().toISOString() }, priceHistory: {} },
+    { tradeUsd: 150, maxSlippageBps: 15, takeProfitBps: 10, stopLossBps: 20, hardStopLossBps: 40, recoveryMaxMinutes: 30, maxPositionMinutes: 10, minSignalBps: 5 }
+  );
+  assert.equal(plan.action, "SELL");
+  assert.match(plan.reason, /Recovery probe/);
+});
+
+test("a token cools down after two consecutive losing closes", () => {
+  const now = new Date().toISOString();
+  const plan = autonomousPlan(
+    { prices: { NVDAx: 99, SNDKx: 100, SPCXx: 100 }, wallet: { assets: [] } },
+    {
+      position: null,
+      priceHistory: { NVDAx: [{ price: 99 }, { price: 99 }, { price: 99 }] },
+      trades: [
+        { at: now, token: "NVDAx", action: "SELL", cashPnlUsd: -0.2 },
+        { at: now, token: "NVDAx", action: "SELL", cashPnlUsd: -0.3 }
+      ]
+    },
+    { tradeUsd: 150, maxSlippageBps: 15, takeProfitBps: 10, stopLossBps: 20, maxPositionMinutes: 10, minSignalBps: 5, maxEntryDowntrendBps: 5, tokenLossStreakLimit: 2, tokenCooldownMinutes: 60 }
+  );
+  assert.equal(plan.action, "HOLD");
 });
 
 test("breakeven probes still require positive economics", () => {
