@@ -22,6 +22,7 @@ export const config = Object.freeze({
     attributionVerified: bool("BOOST_ATTRIBUTION_VERIFIED", false),
     cycleMs: number("AUTONOMOUS_CYCLE_MS", 300000),
     marketPollMs: number("MARKET_POLL_MS", 30000),
+    positionMonitorMs: number("POSITION_MONITOR_MS", 30000),
     aiAnalysisIntervalMs: number("AI_ANALYSIS_INTERVAL_MS", 120000),
     adaptiveTimingEnabled: bool("ADAPTIVE_TIMING_ENABLED", true),
     adaptiveEvaluationMs: number("ADAPTIVE_EVALUATION_MS", 3600000),
@@ -29,6 +30,7 @@ export const config = Object.freeze({
     targetVolumeUsd: number("BOOST_TARGET_VOLUME_USD", 650),
     maxCampaignCostsUsd: number("MAX_CAMPAIGN_COSTS_USD", 10),
     minSignalBps: number("MIN_SIGNAL_BPS", 18),
+    maxEntryDowntrendBps: number("MAX_ENTRY_DOWNTREND_BPS", 5),
     maxPositionMinutes: number("MAX_POSITION_MINUTES", 45),
     takeProfitBps: number("TAKE_PROFIT_BPS", 22),
     stopLossBps: number("STOP_LOSS_BPS", 35),
@@ -39,6 +41,7 @@ export const config = Object.freeze({
     maxRoundTripLossBps: number("MAX_ROUND_TRIP_LOSS_BPS", 15),
     minNetEntryBps: number("MIN_NET_ENTRY_BPS", 3),
     minNetExitBps: number("MIN_NET_EXIT_BPS", 2),
+    maxProjectedLossPerTradeUsd: number("MAX_PROJECTED_LOSS_PER_TRADE_USD", 0.75),
     minDynamicTradeUsd: number("MIN_DYNAMIC_TRADE_USD", 50),
     tokenTradeCapsUsd: Object.freeze({
       NVDAx: number("MAX_TRADE_NVDA_USD", 330),

@@ -13,3 +13,8 @@ export function liquidityQuoteAcceptable(result, maxRoundTripLossBps) {
     && Number.isFinite(Number(result.roundTripLossBps))
     && Number(result.roundTripLossBps) <= Number(maxRoundTripLossBps);
 }
+
+export function projectedWorstLossUsd(amountUsd, roundTripLossBps, stopLossBps) {
+  const combinedBps = Math.max(0, Number(roundTripLossBps)) + Math.max(0, Number(stopLossBps));
+  return Math.max(0, Number(amountUsd)) * combinedBps / 10000;
+}

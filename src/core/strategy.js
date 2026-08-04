@@ -37,7 +37,7 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
         ? "Take profit probe"
         : moveBps <= -settings.stopLossBps
           ? "Stop loss"
-          : "Max hold";
+          : "Breakeven probe";
       return {
         action: "SELL", token: position.token, quoteToken: "USDT",
         amountUsd: Math.min(position.amount * price, settings.tradeUsd),
@@ -53,8 +53,11 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
     const history = (state.priceHistory[token] || []).slice(-Number(settings.priceWindowSamples || 12));
     const current = Number(prices[token]);
     const average = history.length ? history.reduce((sum, item) => sum + Number(item.price), 0) / history.length : current;
-    return { token, current, deviationBps: average > 0 ? ((current / average) - 1) * 10000 : 0, samples: history.length };
-  }).filter(item => item.current > 0 && item.samples >= 3).sort((a, b) => a.deviationBps - b.deviationBps);
+    const trendAnchor = Number(history[Math.max(0, history.length - 4)]?.price || current);
+    const recentTrendBps = trendAnchor > 0 ? ((current / trendAnchor) - 1) * 10000 : 0;
+    return { token, current, deviationBps: average > 0 ? ((current / average) - 1) * 10000 : 0, recentTrendBps, samples: history.length };
+  }).filter(item => item.current > 0 && item.samples >= 3 && item.recentTrendBps >= -Number(settings.maxEntryDowntrendBps ?? 5))
+    .sort((a, b) => a.deviationBps - b.deviationBps);
   const best = candidates[0];
   if (!best || best.deviationBps > -settings.minSignalBps) {
     return { action: "HOLD", token: null, quoteToken: "USDT", amountUsd: 0, maxSlippageBps: 0, confidence: 0.6, reason: "Waiting for a discounted RWA signal" };

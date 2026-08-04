@@ -15,7 +15,7 @@ import { readMarketPrices, readOnchainSnapshot } from "./providers/onchain-marke
 import { readOfficialBoostStatus } from "./providers/boost-official.js";
 import { MemoryStore } from "./store.js";
 import { nextStageTarget } from "./core/stage-target.js";
-import { liquidityCandidates, liquidityQuoteAcceptable } from "./core/liquidity-sizing.js";
+import { liquidityCandidates, liquidityQuoteAcceptable, projectedWorstLossUsd } from "./core/liquidity-sizing.js";
 import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timing.js";
 
 const root = join(fileURLToPath(new URL("..", import.meta.url)), "public");
@@ -33,6 +33,7 @@ let adaptiveTiming = {
 };
 let decisionTimer = null;
 let marketTimer = null;
+let positionMonitorTimer = null;
 
 const publishAdaptiveTiming = (patch = {}) => {
   const previous = store.read().adaptiveTiming || {};
@@ -85,6 +86,15 @@ const scheduleMarketPoll = () => {
     await refreshMarketPrices("timer");
     scheduleMarketPoll();
   }, adaptiveTiming.marketPollMs);
+};
+
+const schedulePositionMonitor = () => {
+  clearTimeout(positionMonitorTimer);
+  positionMonitorTimer = setTimeout(async () => {
+    const state = store.read();
+    if (state.running && state.position) await autonomousCycle("position-monitor");
+    schedulePositionMonitor();
+  }, Math.max(15000, config.execution.positionMonitorMs));
 };
 
 async function syncOfficialBoost(trigger = "timer") {
@@ -185,9 +195,12 @@ async function selectLiquidityAdjustedTrade(plan, snapshot, executor) {
   for (const amountUsd of candidates) {
     const sizedPlan = { ...plan, amountUsd };
     const liquidity = await executor.quoteRoundTrip(sizedPlan, snapshot);
+    const projectedLossUsd = projectedWorstLossUsd(amountUsd, liquidity.roundTripLossBps, config.execution.stopLossBps);
+    liquidity.projectedWorstLossUsd = projectedLossUsd;
     last = { plan: sizedPlan, quote: liquidity.outbound, liquidity };
     const edgeCoversRoundTrip = Number(plan.expectedEdgeBps || 0) >= Number(liquidity.roundTripLossBps) + config.execution.minNetEntryBps;
-    if (liquidityQuoteAcceptable(liquidity, config.execution.maxRoundTripLossBps) && edgeCoversRoundTrip) return last;
+    const dollarRiskAcceptable = projectedLossUsd <= config.execution.maxProjectedLossPerTradeUsd;
+    if (liquidityQuoteAcceptable(liquidity, config.execution.maxRoundTripLossBps) && edgeCoversRoundTrip && dollarRiskAcceptable) return last;
   }
   const loss = Number(last?.liquidity?.roundTripLossBps);
   throw new Error(`No positive-edge size available; best tested round-trip loss ${Number.isFinite(loss) ? loss.toFixed(2) : "unknown"} bps`);
@@ -498,6 +511,7 @@ server.listen(config.port, "127.0.0.1", () => {
   publishAdaptiveTiming({ nextEvaluationAt: new Date(Date.now() + config.execution.adaptiveEvaluationMs).toISOString() });
   scheduleDecisionCycle();
   scheduleMarketPoll();
+  schedulePositionMonitor();
 });
 
 // OKX publishes leaderboard batches roughly every 10 minutes. Polling once a

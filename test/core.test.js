@@ -99,6 +99,25 @@ test("autonomous strategy waits for enough price history", () => {
   assert.equal(plan.action, "HOLD");
 });
 
+test("autonomous strategy rejects a discount that is still trending down", () => {
+  const plan = autonomousPlan(
+    { prices: { NVDAx: 98, SNDKx: 100, SPCXx: 100 }, wallet: { assets: [] } },
+    { position: null, priceHistory: { NVDAx: [{ price: 100 }, { price: 99.5 }, { price: 99 }, { price: 98 }] } },
+    { tradeUsd: 50, maxSlippageBps: 15, takeProfitBps: 10, stopLossBps: 20, maxPositionMinutes: 10, minSignalBps: 5, maxEntryDowntrendBps: 5 }
+  );
+  assert.equal(plan.action, "HOLD");
+});
+
+test("expired positions become breakeven probes instead of forced exits", () => {
+  const plan = autonomousPlan(
+    { prices: { NVDAx: 100 }, wallet: { assets: [] } },
+    { position: { token: "NVDAx", amount: 1, entryPrice: 100, openedAt: new Date(Date.now() - 11 * 60000).toISOString() }, priceHistory: {} },
+    { tradeUsd: 50, maxSlippageBps: 15, takeProfitBps: 10, stopLossBps: 20, maxPositionMinutes: 10, minSignalBps: 5 }
+  );
+  assert.equal(plan.action, "SELL");
+  assert.match(plan.reason, /Breakeven probe/);
+});
+
 test("reward-adjusted economics accepts a low-cost genuine edge", () => {
   const result = assessTradeEconomics(
     { action: "BUY", amountUsd: 15, expectedEdgeBps: 12, reason: "mean reversion" },
@@ -127,6 +146,16 @@ test("risk exits are never trapped by the profit economics gate", () => {
     { maxExecutionCostBps: 5, maxEffectiveCostBps: 1, maxRewardSubsidyBps: 0, minNetEdgeBps: 1 }
   );
   assert.equal(result.approved, true);
+});
+
+test("breakeven probes still require positive economics", () => {
+  const result = assessTradeEconomics(
+    { action: "SELL", amountUsd: 330, expectedEdgeBps: 0, reason: "Breakeven probe NVDAx" },
+    { priceImpactPct: 0.08, tradeFeeUsd: 0.001 },
+    { targetVolumeUsd: 8000, boostVolumeUsd: 6500, maxCampaignCostsUsd: 10, tradingCostsUsd: 0 },
+    { maxExecutionCostBps: 5, maxEffectiveCostBps: 1, maxRewardSubsidyBps: 0, minNetEdgeBps: 1 }
+  );
+  assert.equal(result.approved, false);
 });
 
 test("favorable price impact never creates negative trading cost", () => {
