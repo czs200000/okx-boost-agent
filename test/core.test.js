@@ -217,3 +217,12 @@ test("sell amount is rounded down below the wallet balance", () => {
   assert.ok(Number(pair.amount) <= 0.024753336649506561);
   assert.equal(pair.amount, "0.024753336649");
 });
+
+test("sell exits are not blocked when their value grew above the entry cap", () => {
+  const result = evaluateRisk(
+    { action: "SELL", amountUsd: 155, maxSlippageBps: 10, reason: "Take profit probe" },
+    { attributionVerified: true, campaignActive: true, dailyPnlUsd: 0, tradesLastHour: 1, rwaExposurePct: 10, tokenPositionPct: 10, tradingCostsUsd: 0, maxCampaignCostsUsd: 20 },
+    { ...limits, maxTradeUsd: 150 }
+  );
+  assert.equal(result.approved, true);
+});

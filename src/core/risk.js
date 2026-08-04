@@ -5,7 +5,7 @@ export function evaluateRisk(plan, state, limits) {
 
   if (!["BUY", "SELL", "HOLD"].includes(plan.action)) reasons.push("invalid_action");
   if (plan.action !== "HOLD" && (!Number.isFinite(amount) || amount <= 0)) reasons.push("invalid_amount");
-  if (amount > limits.maxTradeUsd) reasons.push("max_trade_exceeded");
+  if (plan.action === "BUY" && amount > limits.maxTradeUsd) reasons.push("max_trade_exceeded");
   if (slippage > limits.maxSlippageBps) reasons.push("max_slippage_exceeded");
   if (limits.dailyLossLimitPct > 0 && state.dailyPnlUsd <= -(limits.totalCapitalUsd * limits.dailyLossLimitPct / 100)) reasons.push("daily_loss_limit");
   if (limits.maxTradesPerHour > 0 && state.tradesLastHour >= limits.maxTradesPerHour) reasons.push("hourly_trade_limit");

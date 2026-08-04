@@ -42,6 +42,8 @@ export const config = Object.freeze({
     minNetEdgeBps: number("MIN_NET_EDGE_BPS", 1),
     maxRoundTripLossBps: number("MAX_ROUND_TRIP_LOSS_BPS", 15),
     minNetEntryBps: number("MIN_NET_ENTRY_BPS", 10),
+    mediumSizeNetEntryBps: number("MEDIUM_SIZE_NET_ENTRY_BPS", 6),
+    smallSizeNetEntryBps: number("SMALL_SIZE_NET_ENTRY_BPS", 3),
     minNetExitBps: number("MIN_NET_EXIT_BPS", 10),
     tokenLossStreakLimit: number("TOKEN_LOSS_STREAK_LIMIT", 2),
     tokenCooldownMinutes: number("TOKEN_COOLDOWN_MINUTES", 60),

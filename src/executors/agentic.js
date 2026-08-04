@@ -24,9 +24,10 @@ export class AgenticWalletExecutor {
     if (!tokenAddress) throw new Error("Unsupported competition token");
     if (plan.action === "BUY") return { from: USDT, to: tokenAddress, amount: Number(plan.amountUsd).toFixed(2) };
     const asset = snapshot.wallet.assets.find(item => item.tokenAddress?.toLowerCase() === tokenAddress);
-    const price = Number(snapshot.prices[plan.token]);
     const available = Number(asset?.balance || 0);
-    const amount = Math.min(available, Number(plan.amountUsd) / price);
+    // The USD cap applies to entries. Exits must close the complete token
+    // balance so appreciation or quote drift cannot leave an untracked tail.
+    const amount = available;
     if (!(amount > 0)) throw new Error(`No ${plan.token} balance available to sell`);
     const safeAmount = Math.floor(amount * 1e12) / 1e12;
     return { from: tokenAddress, to: USDT, amount: safeAmount.toFixed(12) };

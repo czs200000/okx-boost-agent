@@ -17,6 +17,7 @@ import { MemoryStore } from "./store.js";
 import { nextStageTarget } from "./core/stage-target.js";
 import { liquidityCandidates, liquidityQuoteAcceptable, projectedWorstLossUsd } from "./core/liquidity-sizing.js";
 import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timing.js";
+import { reconcileTradeAccounting } from "./core/trade-accounting.js";
 
 const root = join(fileURLToPath(new URL("..", import.meta.url)), "public");
 const store = new MemoryStore();
@@ -198,7 +199,13 @@ async function selectLiquidityAdjustedTrade(plan, snapshot, executor) {
     const projectedLossUsd = projectedWorstLossUsd(amountUsd, liquidity.roundTripLossBps, config.execution.hardStopLossBps);
     liquidity.projectedWorstLossUsd = projectedLossUsd;
     last = { plan: sizedPlan, quote: liquidity.outbound, liquidity };
-    const edgeCoversRoundTrip = Number(plan.expectedEdgeBps || 0) >= Number(liquidity.roundTripLossBps) + config.execution.minNetEntryBps;
+    const netEntryBufferBps = amountUsd >= 150
+      ? config.execution.minNetEntryBps
+      : amountUsd >= 100
+        ? config.execution.mediumSizeNetEntryBps
+        : config.execution.smallSizeNetEntryBps;
+    liquidity.requiredNetEntryBps = netEntryBufferBps;
+    const edgeCoversRoundTrip = Number(plan.expectedEdgeBps || 0) >= Number(liquidity.roundTripLossBps) + netEntryBufferBps;
     const dollarRiskAcceptable = projectedLossUsd <= config.execution.maxProjectedLossPerTradeUsd;
     if (liquidityQuoteAcceptable(liquidity, config.execution.maxRoundTripLossBps) && edgeCoversRoundTrip && dollarRiskAcceptable) return last;
   }
@@ -343,7 +350,7 @@ async function autonomousCycle(trigger = "timer") {
       lastBroadcastAt: trade.at,
       position: nextPosition,
       pendingConfirmation: null,
-      tradingCostsUsd: state.tradingCostsUsd + (cashPnlUsd == null ? 0 : Math.max(0, -cashPnlUsd)),
+      tradingCostsUsd: Math.max(0, -realizedPnlUsd),
       realizedPnlUsd,
       dailyPnlUsd: realizedPnlUsd,
       tradesLastHour: tradesLastHour + 1
@@ -501,6 +508,13 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(config.port, "127.0.0.1", () => {
   console.log(`OKX Boost workflow dashboard: http://127.0.0.1:${config.port}`);
+  const accounting = reconcileTradeAccounting(store.read().trades);
+  store.update({
+    realizedPnlUsd: accounting.realizedPnlUsd,
+    dailyPnlUsd: accounting.realizedPnlUsd,
+    tradingCostsUsd: Math.max(0, -accounting.realizedPnlUsd)
+  });
+  store.log(`Trade accounting reconciled from ${accounting.matchedCloses} matched exits`);
   if (config.execution.autonomousEnabled && store.read().attributionVerified) {
     store.update({ running: true, mode: "agentic" });
     store.log("Autonomous Agentic Wallet execution enabled");
