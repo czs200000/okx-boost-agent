@@ -32,6 +32,7 @@ const initialState = {
   trades: [],
   position: null,
   priceHistory: {},
+  executableQuoteHistory: {},
   marketPricesUpdatedAt: null,
   adaptiveTiming: null,
   adaptiveEvaluations: [],

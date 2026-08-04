@@ -25,36 +25,15 @@ export function deterministicPlan(market, limits) {
 
 export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
   const now = Date.now();
-  const symbols = ["NVDAx", "SNDKx", "SPCXx"];
-  const prices = snapshot.prices || {};
   const position = state.position;
-  if (position && Number(prices[position.token]) > 0) {
-    const price = Number(prices[position.token]);
-    const moveBps = ((price / position.entryPrice) - 1) * 10000;
-    const ageMinutes = (now - new Date(position.openedAt).getTime()) / 60000;
-    const hardStopBps = Number(settings.hardStopLossBps ?? settings.stopLossBps);
-    const recoveryTimeoutMinutes = Number(settings.recoveryMaxMinutes ?? 30);
-    const shouldProbe = moveBps >= settings.takeProfitBps
-      || moveBps <= -settings.stopLossBps
-      || ageMinutes >= settings.maxPositionMinutes;
-    const mustExit = moveBps <= -hardStopBps || ageMinutes >= recoveryTimeoutMinutes;
-    if (shouldProbe || mustExit) {
-      const exitReason = moveBps <= -hardStopBps
-        ? "Hard stop loss"
-        : ageMinutes >= recoveryTimeoutMinutes
-          ? "Recovery timeout"
-          : moveBps >= settings.takeProfitBps
-            ? "Take profit probe"
-            : "Recovery probe";
-      return {
-        action: "SELL", token: position.token, quoteToken: "USDT",
-        amountUsd: Math.min(position.amount * price, settings.tradeUsd),
-        maxSlippageBps: settings.maxSlippageBps, confidence: 0.8,
-        expectedEdgeBps: Math.max(0, Math.abs(moveBps)),
-        reason: `${exitReason} ${position.token}: ${moveBps.toFixed(1)} bps, ${ageMinutes.toFixed(0)} min`
-      };
-    }
-    return { action: "HOLD", token: position.token, quoteToken: "USDT", amountUsd: 0, maxSlippageBps: 0, confidence: 0.7, reason: `Position ${moveBps.toFixed(1)} bps from entry` };
+  if (position) {
+    return {
+      action: "SELL", token: position.token, quoteToken: "USDT",
+      amountUsd: Number(position.entryCostUsd || settings.tradeUsd),
+      maxSlippageBps: settings.maxSlippageBps, confidence: 0.9,
+      expectedEdgeBps: 0,
+      reason: `Executable exit probe ${position.token}`
+    };
   }
 
   const tokenCoolingDown = token => {
@@ -68,24 +47,33 @@ export function autonomousPlan(snapshot, state, settings, aiPlan = null) {
     const lastCloseAt = new Date(closes[0]?.at || 0).getTime();
     return now - lastCloseAt < Number(settings.tokenCooldownMinutes ?? 60) * 60000;
   };
-  const candidates = symbols.map(token => {
-    const history = (state.priceHistory[token] || []).slice(-Number(settings.priceWindowSamples || 12));
-    const current = Number(prices[token]);
-    const average = history.length ? history.reduce((sum, item) => sum + Number(item.price), 0) / history.length : current;
-    const trendAnchor = Number(history[Math.max(0, history.length - 4)]?.price || current);
-    const recentTrendBps = trendAnchor > 0 ? ((current / trendAnchor) - 1) * 10000 : 0;
-    return { token, current, deviationBps: average > 0 ? ((current / average) - 1) * 10000 : 0, recentTrendBps, samples: history.length };
-  }).filter(item => item.current > 0 && item.samples >= 3 && item.recentTrendBps >= -Number(settings.maxEntryDowntrendBps ?? 5) && !tokenCoolingDown(item.token))
+  const tokenRules = [
+    { token: "NVDAx", amountUsd: Number(settings.tokenTradeCapsUsd?.NVDAx || settings.tradeUsd), signalBps: Number(settings.nvdaEntrySignalBps ?? 1) },
+    { token: "SNDKx", amountUsd: Number(settings.tokenTradeCapsUsd?.SNDKx || 50), signalBps: Number(settings.sndkEntrySignalBps ?? 30) }
+  ].filter(rule => rule.amountUsd > 0);
+  const candidates = tokenRules.map(rule => {
+    const history = (state.executableQuoteHistory?.[rule.token] || []).slice(-Number(settings.executableQuoteWindowSamples || 24));
+    const current = Number(history.at(-1)?.askUnitUsd);
+    const baseline = history.length ? history.reduce((sum, item) => sum + Number(item.askUnitUsd), 0) / history.length : current;
+    const bid = Number(history.at(-1)?.bidUnitUsd);
+    const bidAnchor = Number(history[Math.max(0, history.length - 4)]?.bidUnitUsd || bid);
+    const bidTrendBps = bidAnchor > 0 ? ((bid / bidAnchor) - 1) * 10000 : 0;
+    return { ...rule, current, deviationBps: baseline > 0 ? ((current / baseline) - 1) * 10000 : 0, bidTrendBps, samples: history.length };
+  }).filter(item => item.current > 0
+      && item.samples >= Number(settings.executableQuoteMinSamples || 3)
+      && item.bidTrendBps >= -Number(settings.maxEntryDowntrendBps ?? 5)
+      && item.deviationBps <= -item.signalBps
+      && !tokenCoolingDown(item.token))
     .sort((a, b) => a.deviationBps - b.deviationBps);
   const best = candidates[0];
-  if (!best || best.deviationBps > -settings.minSignalBps) {
-    return { action: "HOLD", token: null, quoteToken: "USDT", amountUsd: 0, maxSlippageBps: 0, confidence: 0.6, reason: "Waiting for a discounted RWA signal" };
+  if (!best) {
+    return { action: "HOLD", token: null, quoteToken: "USDT", amountUsd: 0, maxSlippageBps: 0, confidence: 0.6, reason: "Waiting for a discounted executable quote" };
   }
   return {
-    action: "BUY", token: best.token, quoteToken: "USDT", amountUsd: settings.tradeUsd,
+    action: "BUY", token: best.token, quoteToken: "USDT", amountUsd: best.amountUsd,
     maxSlippageBps: settings.maxSlippageBps, confidence: Math.min(0.9, 0.6 + Math.abs(best.deviationBps) / 300),
     expectedEdgeBps: Math.abs(best.deviationBps),
     aiAgreement: aiPlan?.action === "BUY" && aiPlan?.token === best.token,
-    reason: `${best.token} trades ${best.deviationBps.toFixed(1)} bps below rolling mean${aiPlan ? `; DeepSeek ${aiPlan.action} ${aiPlan.token || ""}` : ""}`
+    reason: `${best.token} executable ask ${best.deviationBps.toFixed(1)} bps below rolling mean${aiPlan ? `; DeepSeek ${aiPlan.action} ${aiPlan.token || ""}` : ""}`
   };
 }

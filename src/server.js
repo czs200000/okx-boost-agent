@@ -181,6 +181,32 @@ async function refreshMarketPrices(trigger = "timer") {
   }
 }
 
+async function refreshExecutableQuoteHistory(snapshot, executor) {
+  const state = store.read();
+  const history = structuredClone(state.executableQuoteHistory || {});
+  const probes = [
+    { token: "NVDAx", amountUsd: config.execution.tokenTradeCapsUsd.NVDAx },
+    { token: "SNDKx", amountUsd: config.execution.tokenTradeCapsUsd.SNDKx }
+  ].filter(item => item.amountUsd > 0);
+  for (const probe of probes) {
+    try {
+      const quote = await executor.quoteRoundTrip({ action: "BUY", quoteToken: "USDT", maxSlippageBps: config.risk.maxSlippageBps, ...probe }, snapshot);
+      const askUnitUsd = Number(quote.outbound.fromAmount) / Number(quote.outbound.toAmount);
+      const bidUnitUsd = Number(quote.returnQuote.toAmount) / Number(quote.returnQuote.fromAmount);
+      if (!(askUnitUsd > 0) || !(bidUnitUsd > 0)) throw new Error("invalid executable unit price");
+      const sample = {
+        at: new Date().toISOString(), amountUsd: probe.amountUsd, askUnitUsd, bidUnitUsd,
+        roundTripLossUsd: Number(quote.roundTripLossUsd), roundTripLossBps: Number(quote.roundTripLossBps),
+        action: quote.outbound.action, returnAction: quote.returnQuote.action
+      };
+      history[probe.token] = [...(history[probe.token] || []), sample].slice(-48);
+    } catch (error) {
+      store.log(`Executable quote probe ${probe.token} failed: ${error.message}`, "warn");
+    }
+  }
+  store.update({ executableQuoteHistory: history, executableQuotesUpdatedAt: new Date().toISOString() });
+}
+
 async function selectLiquidityAdjustedTrade(plan, snapshot, executor) {
   if (plan.action !== "BUY") {
     const quote = await executor.quote(plan, snapshot);
@@ -219,6 +245,7 @@ async function autonomousCycle(trigger = "timer") {
   try {
     const [wallet, snapshot] = await Promise.all([readAgenticWalletStatus(), readOnchainSnapshot(true)]);
     if (!wallet.connected || !wallet.evmAddress) throw new Error("Agentic Wallet is disconnected");
+    const executor = new AgenticWalletExecutor({ enabled: true, walletAddress: wallet.evmAddress, tokens: xLayerRwaTokens, maxSlippageBps: config.risk.maxSlippageBps });
     let state = store.read();
     const oneHourAgo = Date.now() - 3600000;
     const tradesLastHour = (state.trades || []).filter(item => new Date(item.at).getTime() >= oneHourAgo).length;
@@ -263,6 +290,10 @@ async function autonomousCycle(trigger = "timer") {
       }
       state = store.read();
     }
+    if (!state.position) {
+      await refreshExecutableQuoteHistory(snapshot, executor);
+      state = store.read();
+    }
     const market = marketFromSnapshot(snapshot, state);
     let aiPlan = null;
     if (deepseek.configured) {
@@ -297,7 +328,6 @@ async function autonomousCycle(trigger = "timer") {
       if (risk.reasons.includes("daily_loss_limit")) store.update({ running: false });
       return;
     }
-    const executor = new AgenticWalletExecutor({ enabled: true, walletAddress: wallet.evmAddress, tokens: xLayerRwaTokens, maxSlippageBps: config.risk.maxSlippageBps });
     const sized = await selectLiquidityAdjustedTrade(plan, snapshot, executor);
     const executionPlan = sized.plan;
     const quote = sized.quote;
@@ -309,11 +339,13 @@ async function autonomousCycle(trigger = "timer") {
       economics.exitProceedsUsd = exitProceedsUsd;
       economics.cashPnlUsd = cashPnlUsd;
       economics.netExitBps = netExitBps;
-      const forcedExit = /hard stop loss|recovery timeout/i.test(executionPlan.reason || "");
       const dollarStop = -cashPnlUsd >= config.execution.maxProjectedLossPerTradeUsd;
-      if (forcedExit || dollarStop) {
+      if (dollarStop) {
         economics.approved = true;
-        economics.reason = dollarStop ? "dollar loss ceiling reached" : "risk exit required";
+        economics.reason = "dollar loss ceiling reached";
+      } else if (netExitBps >= config.execution.minNetExitBps) {
+        economics.approved = true;
+        economics.reason = "executable net target reached";
       } else if (netExitBps < config.execution.minNetExitBps) {
         economics.approved = false;
         economics.reason = `net exit ${netExitBps.toFixed(2)} bps below ${config.execution.minNetExitBps.toFixed(2)} bps target`;

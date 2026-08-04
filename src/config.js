@@ -47,12 +47,16 @@ export const config = Object.freeze({
     minNetExitBps: number("MIN_NET_EXIT_BPS", 10),
     tokenLossStreakLimit: number("TOKEN_LOSS_STREAK_LIMIT", 2),
     tokenCooldownMinutes: number("TOKEN_COOLDOWN_MINUTES", 60),
+    executableQuoteMinSamples: number("EXECUTABLE_QUOTE_MIN_SAMPLES", 3),
+    executableQuoteWindowSamples: number("EXECUTABLE_QUOTE_WINDOW_SAMPLES", 24),
+    nvdaEntrySignalBps: number("NVDA_ENTRY_SIGNAL_BPS", 1),
+    sndkEntrySignalBps: number("SNDK_ENTRY_SIGNAL_BPS", 30),
     maxProjectedLossPerTradeUsd: number("MAX_PROJECTED_LOSS_PER_TRADE_USD", 0.75),
     minDynamicTradeUsd: number("MIN_DYNAMIC_TRADE_USD", 50),
     tokenTradeCapsUsd: Object.freeze({
       NVDAx: number("MAX_TRADE_NVDA_USD", 330),
-      SNDKx: number("MAX_TRADE_SNDK_USD", 250),
-      SPCXx: number("MAX_TRADE_SPCX_USD", 330)
+      SNDKx: number("MAX_TRADE_SNDK_USD", 50),
+      SPCXx: number("MAX_TRADE_SPCX_USD", 0)
     })
   },
   risk: {
