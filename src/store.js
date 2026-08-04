@@ -53,6 +53,9 @@ export class MemoryStore {
     }
     this.state.mode = process.env.EXECUTION_MODE || this.state.mode;
     this.state.attributionVerified = process.env.BOOST_ATTRIBUTION_VERIFIED === "true" || this.state.attributionVerified;
+    // Risk-budget changes in .env are authoritative across restarts; otherwise
+    // an older persisted state silently keeps the previous ceiling forever.
+    this.state.maxCampaignCostsUsd = Number(process.env.MAX_CAMPAIGN_COSTS_USD || this.state.maxCampaignCostsUsd || 10);
     this.state.tradingCostsUsd = Math.max(0, Number(this.state.tradingCostsUsd || 0));
     this.persist();
   }
