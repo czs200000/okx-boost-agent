@@ -217,9 +217,30 @@ function renderMakerDecision(decision) {
     </div>`;
 }
 
+const HACKATHON_DEADLINE_UTC = Date.UTC(2026, 7, 21, 23, 59, 0); // 2026-08-21 23:59 UTC
+function renderHackathon() {
+  const node = el("hackathonCountdown");
+  if (!node) return;
+  const diff = HACKATHON_DEADLINE_UTC - Date.now();
+  if (diff <= 0) {
+    node.textContent = "提交已截止";
+    node.className = "pill warn";
+    return;
+  }
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const mins = Math.floor((diff % 3600000) / 60000);
+  node.textContent = `提交截止 ${days} 天 ${hours} 时 ${mins} 分`;
+  node.className = days <= 1 ? "pill warn" : "pill";
+}
+
 function renderMaker(payload) {
   const { state, wallet, onchain, maker, capabilities } = payload;
-  const price = Number(onchain?.prices?.NVDAx || 0);
+  const token = maker?.token || "NVDAx";
+  const price = Number(onchain?.prices?.[token] || 0);
+  el("makerTokenTitle").textContent = `${token} 做市轮转`;
+  el("makerInventoryLabel").textContent = `${token} 库存`;
+  el("makerPriceLabel").textContent = `当前 ${token} 价格`;
   el("makerLegUsd").textContent = money(maker.legUsd);
   el("makerPauseLabel").textContent = `维护窗口 ${maker.pauseStartUtc}–${maker.pauseEndUtc} UTC · 触发 ±${maker.buyTriggerBps}/${maker.sellTriggerBps}bps`;
   el("makerPhase").textContent = state.phase || "—";
@@ -380,7 +401,9 @@ el("makerCycleButton").addEventListener("click", async () => {
 
 refresh();
 refreshMaker();
+renderHackathon();
 setInterval(refreshLive, 2000);
 setInterval(refresh, 15000);
 setInterval(refreshMakerLive, 4000);
 setInterval(refreshMaker, 15000);
+setInterval(renderHackathon, 30000);

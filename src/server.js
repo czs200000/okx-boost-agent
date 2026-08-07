@@ -1042,6 +1042,22 @@ async function makerCycle(trigger = "timer") {
       makerStore.log(`Price jump guard: ${lastPrice.toFixed(4)} -> ${price.toFixed(4)} (${priceJumpBps.toFixed(1)} bps)`, "warn");
     }
 
+    // Downtrend guard: anchor to the price at the start of a rolling window;
+    // if the price drops more than trendPauseBps below that anchor, block new
+    // buys until the window re-anchors (or price recovers). Exits stay open.
+    const trendWindowMs = Math.max(10000, config.maker.trendWindowMs);
+    let trendAnchorPrice = Number(state.trendAnchorPrice || price);
+    let trendAnchorAt = Number(state.trendAnchorAt || Date.now());
+    if (Date.now() - trendAnchorAt >= trendWindowMs) {
+      trendAnchorPrice = price;
+      trendAnchorAt = Date.now();
+    }
+    const trendDropBps = trendAnchorPrice > 0 ? (trendAnchorPrice / price - 1) * 10000 : 0;
+    const downtrendPaused = trendDropBps > config.maker.trendPauseBps;
+    if (downtrendPaused && !state.downtrendPaused) {
+      makerStore.log(`Downtrend guard: ${trendDropBps.toFixed(1)} bps below anchor ${trendAnchorPrice.toFixed(4)} — buy paused`, "warn");
+    }
+
     const hourUtc = new Date().getUTCHours();
     const pauseWindow = config.maker.pauseStartUtc < config.maker.pauseEndUtc
       && hourUtc >= config.maker.pauseStartUtc && hourUtc < config.maker.pauseEndUtc;
@@ -1155,7 +1171,8 @@ async function makerCycle(trigger = "timer") {
           inventorySince: nextInventorySince,
           now: Date.now(),
           maxHoldMs: config.maker.maxHoldMs,
-          entryPrice: inventoryUnits > 0 ? costBasisUsd / inventoryUnits : 0
+          entryPrice: inventoryUnits > 0 ? costBasisUsd / inventoryUnits : 0,
+          downtrendPaused
         });
     let orderInfo = null;
     if (decision.action === "BUY" && !activeOrder) {
@@ -1214,6 +1231,9 @@ async function makerCycle(trigger = "timer") {
       lastUsdtBalanceUsd: usdtBalanceUsd,
       lastPrice: price,
       lastPriceAt: Date.now(),
+      trendAnchorPrice,
+      trendAnchorAt,
+      downtrendPaused,
       lastDecision: {
         at: new Date().toISOString(),
         price,
@@ -1662,7 +1682,7 @@ server.listen(config.port, "127.0.0.1", () => {
     const makerState = makerStore.read();
     if (config.maker.autonomousEnabled && (makerState.attributionVerified || store.read().attributionVerified)) {
       makerStore.update({ running: true });
-      makerStore.log("Maker rotation enabled — NVDAx limit-order market making");
+      makerStore.log(`Maker rotation enabled — ${config.maker.token} limit-order market making`);
       setImmediate(() => makerCycle("startup"));
     } else {
       makerStore.log("Maker module ready — waiting for attribution verification before placing orders");

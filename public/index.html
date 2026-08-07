@@ -108,7 +108,7 @@
         <section class="hero panel maker-hero">
           <div>
             <span class="pill maker-pill">X LAYER · MAKER</span>
-            <h2>NVDAx 做市轮转</h2>
+            <h2 id="makerTokenTitle">做市轮转</h2>
             <p>单一币种限价做市：买低卖高、严格交替、库存中性，模仿前 200 名高频机器人。</p>
             <div class="hero-controls">
               <span id="makerSystemStatus" class="status paused"><i></i> 未运行</span>
@@ -123,14 +123,50 @@
           </div>
         </section>
 
+        <section class="panel hackathon-card">
+          <div class="card-title">
+            <div><span class="eyebrow">AI SEASON HACKATHON</span><h3>AI Season 黑客松 · 参赛状态</h3></div>
+            <span id="hackathonCountdown" class="pill warn">提交截止倒计时</span>
+          </div>
+          <div class="hackathon-grid">
+            <div class="hackathon-col">
+              <h4>OKX Boost Agent</h4>
+              <p class="hackathon-desc">基于 DeepSeek 的 X Layer AI 做市智能体 · 已提交 Google Form</p>
+              <ul class="hackathon-links">
+                <li>演示页：<a href="https://czs200000.github.io/okx-boost-agent/" target="_blank" rel="noopener">czs200000.github.io/okx-boost-agent</a></li>
+                <li>GitHub：<a href="https://github.com/czs200000/okx-boost-agent" target="_blank" rel="noopener">github.com/czs200000/okx-boost-agent</a></li>
+                <li>X 帖子：<a href="https://x.com/LIMCHOONSIANG5/status/2085765254064304235" target="_blank" rel="noopener">@LIMCHOONSIANG5</a></li>
+                <li>测试网账本：<a href="https://www.okx.com/web3/explorer/xlayer-test/address/0x53A35F8f5B1fcb5Dd7154216BC0ad892FbaB8B6e" target="_blank" rel="noopener">0x53A35F…B8B6e</a></li>
+              </ul>
+            </div>
+            <div class="hackathon-col">
+              <h4>奖项目标</h4>
+              <ul class="hackathon-prizes">
+                <li><b>Liquidity Grant</b> · AI-RWA 赛道最高 50,000 USDT（做市对口）</li>
+                <li>黑客松奖金 · 第1名 30,000 / 第2名 15,000 / 第3名 5,000 USDT</li>
+                <li>Launch Grant · 最高 200,000 USDT（OKX DEX 交易额解锁）</li>
+              </ul>
+            </div>
+            <div class="hackathon-col">
+              <h4>参赛条件核验</h4>
+              <ul class="hackathon-checks">
+                <li class="ok">AI 元素 + X Layer 部署 ✅</li>
+                <li class="ok">X Layer 测试网部署 ✅（chainId 1952）</li>
+                <li class="ok">独立 X 账号 + @XLayerOfficial ✅</li>
+                <li class="ok">Google Form 提交 ✅</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
         <section class="metrics">
           <article class="metric panel tone-green live-volume"><span>当前相位</span><strong id="makerPhase">—</strong><small id="makerOrderStatus">无挂单</small></article>
-          <article class="metric panel tone-cyan"><span>NVDAx 库存</span><strong id="makerInventory">0</strong><small id="makerInventoryUsd">$0.00</small></article>
-          <article class="metric panel tone-amber"><span>库存成本</span><strong id="makerCostBasis">$0.00</strong><small>按触发价核算</small></article>
+          <article class="metric panel tone-cyan"><span id="makerInventoryLabel">库存</span><strong id="makerInventory">0</strong><small id="makerInventoryUsd">$0.00</small></article>
+          <article class="metric panel tone-amber"><span>库存成本</span><strong id="makerCostBasis">$0.00</strong><small>按实际成交核算</small></article>
           <article class="metric panel tone-blue"><span>已完成轮次</span><strong id="makerRoundTrips">0</strong><small id="makerTradeCount">0 笔成交记录</small></article>
           <article class="metric panel tone-cyan"><span>已实现盈亏</span><strong id="makerPnl">$0.00</strong><small id="makerLossStreak">连续亏损 0</small></article>
           <article class="metric panel tone-red"><span>熔断状态</span><strong id="makerCircuit">正常</strong><small id="makerCooldown">—</small></article>
-          <article class="metric panel tone-violet"><span>当前 NVDAx 价格</span><strong id="makerPrice">—</strong><small id="makerTriggerInfo">触发 ±3bps</small></article>
+          <article class="metric panel tone-violet"><span id="makerPriceLabel">当前价格</span><strong id="makerPrice">—</strong><small id="makerTriggerInfo">触发 ±3bps</small></article>
           <article class="metric panel tone-amber"><span>资金池（USDT）</span><strong id="makerUsdtBalance">$0.00</strong><small>Maker 可用余额</small></article>
         </section>
 
