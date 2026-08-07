@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OKX Boost Agent Workflow</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=10" />
   </head>
   <body>
     <main class="shell">
@@ -21,6 +21,12 @@
         </div>
       </header>
 
+      <nav class="tabs" aria-label="活动切换">
+        <button id="tabXlayer" class="tab active" type="button">X Layer RWA</button>
+        <button id="tabMaker" class="tab" type="button">Maker 做市</button>
+      </nav>
+
+      <section id="panelXlayer" class="tab-panel">
       <section class="hero panel">
         <div>
           <span class="pill">X LAYER · RWA</span>
@@ -41,7 +47,7 @@
         <article class="metric panel tone-blue"><span>累计交易笔数</span><strong id="tradeCount">0</strong><small>仅统计已广播交易</small></article>
         <article class="metric panel tone-cyan"><span>当前排名</span><strong id="rank">—</strong><small id="rankStatus">每 10 分钟更新</small></article>
         <article class="metric panel tone-amber"><span>累计交易成本</span><strong id="tradingCosts">$0.00</strong><small>价差、冲击与交易费</small></article>
-        <article id="pnlMetric" class="metric panel tone-green"><span>今日净收益</span><strong id="dailyPnl">$0.00</strong><small>含交易成本</small></article>
+        <article id="pnlMetric" class="metric panel tone-green"><span>总盈亏 · 真实净值</span><strong id="totalPnl">$0.00</strong><small id="totalPnlDetail">今日净值变动 — · 今日已实现 $0.00 · 浮动 $0.00</small></article>
         <article class="metric panel tone-violet"><span>预估奖励</span><strong id="estimatedReward">$0.00</strong><small>未计概率折扣</small></article>
       </section>
 
@@ -96,7 +102,50 @@
           <div id="logs" class="logs"></div>
         </article>
       </section>
+      </section>
+
+      <section id="panelMaker" class="tab-panel hidden">
+        <section class="hero panel maker-hero">
+          <div>
+            <span class="pill maker-pill">X LAYER · MAKER</span>
+            <h2>NVDAx 做市轮转</h2>
+            <p>单一币种限价做市：买低卖高、严格交替、库存中性，模仿前 200 名高频机器人。</p>
+            <div class="hero-controls">
+              <span id="makerSystemStatus" class="status paused"><i></i> 未运行</span>
+              <button id="makerStartButton" class="button start-control">启动 Maker 做市</button>
+              <button id="makerStopButton" class="button stop-control stopped">停止 Maker</button>
+            </div>
+          </div>
+          <div class="hero-metric">
+            <span>单笔腿</span>
+            <strong id="makerLegUsd">$200</strong>
+            <small id="makerPauseLabel">维护窗口 03–07 UTC</small>
+          </div>
+        </section>
+
+        <section class="metrics">
+          <article class="metric panel tone-green live-volume"><span>当前相位</span><strong id="makerPhase">—</strong><small id="makerOrderStatus">无挂单</small></article>
+          <article class="metric panel tone-cyan"><span>NVDAx 库存</span><strong id="makerInventory">0</strong><small id="makerInventoryUsd">$0.00</small></article>
+          <article class="metric panel tone-amber"><span>库存成本</span><strong id="makerCostBasis">$0.00</strong><small>按触发价核算</small></article>
+          <article class="metric panel tone-blue"><span>已完成轮次</span><strong id="makerRoundTrips">0</strong><small id="makerTradeCount">0 笔成交记录</small></article>
+          <article class="metric panel tone-cyan"><span>已实现盈亏</span><strong id="makerPnl">$0.00</strong><small id="makerLossStreak">连续亏损 0</small></article>
+          <article class="metric panel tone-red"><span>熔断状态</span><strong id="makerCircuit">正常</strong><small id="makerCooldown">—</small></article>
+          <article class="metric panel tone-violet"><span>当前 NVDAx 价格</span><strong id="makerPrice">—</strong><small id="makerTriggerInfo">触发 ±3bps</small></article>
+          <article class="metric panel tone-amber"><span>资金池（USDT）</span><strong id="makerUsdtBalance">$0.00</strong><small>Maker 可用余额</small></article>
+        </section>
+
+        <section class="grid two lower">
+          <article class="panel card">
+            <div class="card-title"><div><span class="eyebrow">MAKER DECISION</span><h3>最近决策</h3></div><button id="makerCycleButton" class="button">手动跑一轮</button></div>
+            <div id="makerDecision" class="decision empty">尚无策略决策</div>
+          </article>
+          <article class="panel card">
+            <div class="card-title"><div><span class="eyebrow">MAKER EVENT STREAM</span><h3>工作流日志</h3></div></div>
+            <div id="makerLogs" class="logs"></div>
+          </article>
+        </section>
+      </section>
     </main>
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=10"></script>
   </body>
 </html>

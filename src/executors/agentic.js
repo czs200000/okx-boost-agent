@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
 
 const cli = process.env.ONCHAINOS_CLI || "onchainos";
-const USDT = "0x779ded0c9e1022225f8e0630b35a9b54be713736";
+const USDT_BY_CHAIN = Object.freeze({
+  xlayer: "0x779ded0c9e1022225f8e0630b35a9b54be713736",
+  bsc: "0x55d398326f99059ff775485246999027b3197955"
+});
 
 const run = args => new Promise(resolve => {
   execFile(cli, args, { timeout: 120000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -12,25 +15,28 @@ const run = args => new Promise(resolve => {
 });
 
 export class AgenticWalletExecutor {
-  constructor({ enabled = false, walletAddress, tokens, maxSlippageBps = 15 } = {}) {
+  constructor({ enabled = false, walletAddress, tokens, maxSlippageBps = 15, chain = "xlayer", quoteTokenAddress = USDT_BY_CHAIN[chain] || USDT_BY_CHAIN.xlayer } = {}) {
     this.enabled = enabled;
     this.walletAddress = walletAddress;
     this.tokens = tokens;
     this.maxSlippageBps = maxSlippageBps;
+    this.chain = chain;
+    this.quoteTokenAddress = quoteTokenAddress;
   }
 
   resolve(plan, snapshot) {
     const tokenAddress = this.tokens[plan.token];
     if (!tokenAddress) throw new Error("Unsupported competition token");
-    if (plan.action === "BUY") return { from: USDT, to: tokenAddress, amount: Number(plan.amountUsd).toFixed(2) };
+    if (plan.action === "BUY") return { from: this.quoteTokenAddress, to: tokenAddress, amount: Number(plan.amountUsd).toFixed(2) };
     const asset = snapshot.wallet.assets.find(item => item.tokenAddress?.toLowerCase() === tokenAddress);
     const available = Number(asset?.balance || 0);
-    // The USD cap applies to entries. Exits must close the complete token
-    // balance so appreciation or quote drift cannot leave an untracked tail.
-    const amount = available;
+    // Lot exits use an explicit token amount; legacy exits still fall back to
+    // closing the currently available token balance.
+    const requested = Number(plan.amountToken || 0);
+    const amount = requested > 0 ? Math.min(requested, available) : available;
     if (!(amount > 0)) throw new Error(`No ${plan.token} balance available to sell`);
     const safeAmount = Math.floor(amount * 1e12) / 1e12;
-    return { from: tokenAddress, to: USDT, amount: safeAmount.toFixed(12) };
+    return { from: tokenAddress, to: this.quoteTokenAddress, amount: safeAmount.toFixed(12) };
   }
 
   async quote(plan, snapshot) {
@@ -39,7 +45,7 @@ export class AgenticWalletExecutor {
   }
 
   async quotePair(pair) {
-    const result = await run(["swap", "quote", "--from", pair.from, "--to", pair.to, "--readable-amount", pair.amount, "--chain", "xlayer"]);
+    const result = await run(["swap", "quote", "--from", pair.from, "--to", pair.to, "--readable-amount", pair.amount, "--chain", this.chain]);
     const route = result.payload?.data?.[0];
     if (!result.payload?.ok || !route) throw new Error(result.payload?.error || "No swap route");
     return {
@@ -53,6 +59,7 @@ export class AgenticWalletExecutor {
       toSymbol: route.toToken.tokenSymbol,
       // The OnchainOS CLI documents tradeFee as an absolute USD value.
       tradeFeeUsd: Number(route.tradeFee || 0),
+      gasLimit: Number(route.estimateGasFee || 0),
       route: (route.dexRouterList || []).map(item => item.dexProtocol?.dexName).filter(Boolean)
     };
   }
@@ -78,7 +85,7 @@ export class AgenticWalletExecutor {
     if (quote.action === "block") throw new Error(`BLOCK: ${quote.reason || "route rejected by OKX risk controls"}`);
     if (quote.action === "warn") throw new Error(`WARN: ${quote.reason || "route requires manual review"}`);
     if (quote.priceImpactPct * 100 > this.maxSlippageBps) throw new Error("Quote exceeds configured slippage/impact limit");
-    const args = ["swap", "execute", "--from", quote.from, "--to", quote.to, "--readable-amount", quote.amount, "--chain", "xlayer", "--wallet", this.walletAddress, "--gas-level", "average", "--max-auto-slippage", String(this.maxSlippageBps / 100)];
+    const args = ["swap", "execute", "--from", quote.from, "--to", quote.to, "--readable-amount", quote.amount, "--chain", this.chain, "--wallet", this.walletAddress, "--gas-level", "average", "--max-auto-slippage", String(this.maxSlippageBps / 100)];
     const result = await run(args);
     if (result.exitCode === 2 || result.payload?.confirming) {
       return { status: "CONFIRMING", message: result.payload?.message || result.payload?.error || "Wallet confirmation required", next: result.payload?.next || null };

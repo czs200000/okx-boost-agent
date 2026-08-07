@@ -24,3 +24,26 @@ export function evaluateRisk(plan, state, limits) {
     reasons
   };
 }
+
+export function evaluateAeonRisk(plan, state, settings) {
+  const reasons = [];
+  const amount = Number(plan.amountUsd);
+  const slippage = Number(plan.maxSlippageBps);
+
+  if (!["BUY", "SELL", "HOLD"].includes(plan.action)) reasons.push("invalid_action");
+  if (plan.action !== "HOLD" && (!Number.isFinite(amount) || amount <= 0)) reasons.push("invalid_amount");
+  if (plan.action === "BUY" && amount > Number(settings.maxTradeUsd || 0)) reasons.push("max_trade_exceeded");
+  if (slippage > Number(settings.maxSlippageBps || 0)) reasons.push("max_slippage_exceeded");
+  const maxLossUsd = Number(settings.maxLossUsd || 0);
+  if (maxLossUsd > 0 && Number(state.realizedPnlUsd || 0) <= -maxLossUsd) reasons.push("max_loss_hit");
+  const cooldownMs = Math.max(0, Number(settings.minBroadcastIntervalMs || 0));
+  const lastBroadcastAt = state.lastBroadcastAt ? new Date(state.lastBroadcastAt).getTime() : 0;
+  if (plan.action !== "HOLD" && cooldownMs > 0 && lastBroadcastAt > 0 && Date.now() - lastBroadcastAt < cooldownMs) reasons.push("broadcast_cooldown");
+  if (!state.attributionVerified && Number(state.officialParticipationStatus || 0) !== 2) reasons.push("competition_not_registered");
+  if (!state.campaignActive) reasons.push("campaign_inactive");
+
+  return {
+    approved: reasons.length === 0 && plan.action !== "HOLD",
+    reasons
+  };
+}

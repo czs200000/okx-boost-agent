@@ -21,6 +21,27 @@ test("matched cash losses remain counted", () => {
   assert.equal(result.realizedLossUsd, 0.5);
 });
 
+test("multiple buys are preserved and matched FIFO across closes", () => {
+  const result = reconcileTradeAccounting([
+    { at: "2026-01-01T00:00:00Z", action: "BUY", token: "NVDAx", quote: { fromAmount: 50, toAmount: 0.25 } },
+    { at: "2026-01-01T00:01:00Z", action: "BUY", token: "NVDAx", quote: { fromAmount: 50, toAmount: 0.20 } },
+    { at: "2026-01-01T00:02:00Z", action: "SELL", token: "NVDAx", quote: { fromAmount: 0.25, toAmount: 50.1 } },
+    { at: "2026-01-01T00:03:00Z", action: "SELL", token: "NVDAx", quote: { fromAmount: 0.20, toAmount: 50.2 } }
+  ]);
+  assert.ok(Math.abs(result.realizedPnlUsd - 0.3) < 1e-9);
+  assert.equal(result.matchedCloses, 2);
+});
+
+test("one sell can consume several FIFO lots", () => {
+  const result = reconcileTradeAccounting([
+    { at: "2026-01-01T00:00:00Z", action: "BUY", token: "CRCLx", quote: { fromAmount: 25, toAmount: 0.5 } },
+    { at: "2026-01-01T00:01:00Z", action: "BUY", token: "CRCLx", quote: { fromAmount: 25, toAmount: 0.5 } },
+    { at: "2026-01-01T00:02:00Z", action: "SELL", token: "CRCLx", quote: { fromAmount: 1, toAmount: 50.5 } }
+  ]);
+  assert.ok(Math.abs(result.realizedPnlUsd - 0.5) < 1e-9);
+  assert.equal(result.matchedCloses, 1);
+});
+
 test("net campaign loss allows winners to offset losing closes", () => {
   const result = reconcileTradeAccounting([
     { at: "2026-08-04T00:00:00Z", action: "BUY", token: "NVDAx", quote: { fromAmount: 100, toAmount: 1 } },

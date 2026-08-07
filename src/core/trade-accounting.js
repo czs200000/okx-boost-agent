@@ -10,26 +10,41 @@ export function reconcileTradeAccounting(trades) {
     if (trade.action === "BUY") {
       const units = Number(trade.quote?.toAmount || trade.toAmount || 0);
       const costUsd = Number(trade.quote?.fromAmount || trade.amountUsd || 0);
-      if (units > 0 && costUsd > 0) lots.set(token, { units, costUsd });
+      if (units > 0 && costUsd > 0) {
+        const tokenLots = lots.get(token) || [];
+        tokenLots.push({ units, costUsd });
+        lots.set(token, tokenLots);
+      }
       continue;
     }
     if (trade.action !== "SELL") continue;
-    const lot = lots.get(token);
+    const tokenLots = lots.get(token) || [];
     const soldUnits = Number(trade.quote?.fromAmount || trade.fromAmount || 0);
     const proceedsUsd = Number(trade.quote?.toAmount || trade.amountUsd || 0);
-    if (!lot || !(soldUnits > 0) || !(proceedsUsd >= 0)) continue;
-    const matchedUnits = Math.min(lot.units, soldUnits);
-    const ratio = matchedUnits / soldUnits;
-    const allocatedCostUsd = lot.costUsd * (matchedUnits / lot.units);
-    const allocatedProceedsUsd = proceedsUsd * ratio;
-    const pnlUsd = allocatedProceedsUsd - allocatedCostUsd;
-    realizedPnlUsd += pnlUsd;
-    realizedLossUsd += Math.max(0, -pnlUsd);
-    matchedCloses += 1;
-    lot.units -= matchedUnits;
-    lot.costUsd -= allocatedCostUsd;
-    if (lot.units <= 1e-12) lots.delete(token);
-    else lots.set(token, lot);
+    if (!tokenLots.length || !(soldUnits > 0) || !(proceedsUsd >= 0)) continue;
+    let remainingUnits = soldUnits;
+    let matchedUnitsTotal = 0;
+    let allocatedCostUsdTotal = 0;
+    while (remainingUnits > 1e-12 && tokenLots.length) {
+      const lot = tokenLots[0];
+      const matchedUnits = Math.min(lot.units, remainingUnits);
+      const allocatedCostUsd = lot.costUsd * (matchedUnits / lot.units);
+      matchedUnitsTotal += matchedUnits;
+      allocatedCostUsdTotal += allocatedCostUsd;
+      lot.units -= matchedUnits;
+      lot.costUsd -= allocatedCostUsd;
+      remainingUnits -= matchedUnits;
+      if (lot.units <= 1e-12) tokenLots.shift();
+    }
+    if (matchedUnitsTotal > 0) {
+      const allocatedProceedsUsd = proceedsUsd * (matchedUnitsTotal / soldUnits);
+      const pnlUsd = allocatedProceedsUsd - allocatedCostUsdTotal;
+      realizedPnlUsd += pnlUsd;
+      realizedLossUsd += Math.max(0, -pnlUsd);
+      matchedCloses += 1;
+    }
+    if (tokenLots.length) lots.set(token, tokenLots);
+    else lots.delete(token);
   }
 
   return { realizedPnlUsd, realizedLossUsd, matchedCloses };

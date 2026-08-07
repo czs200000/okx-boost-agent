@@ -1,0 +1,9 @@
+{
+  "chainId": 1952,
+  "rpc": "https://testrpc.xlayer.tech/terigon",
+  "agentName": "OKX Boost Agent",
+  "address": "0x53A35F8f5B1fcb5Dd7154216BC0ad892FbaB8B6e",
+  "txHash": "0xc932ce0ab8af07ed6f654047f121655f2a9bbadba100dcae77a08f0509a5149c",
+  "blockNumber": 37660871,
+  "deployedAt": "2026-08-07T16:21:48.159Z"
+}

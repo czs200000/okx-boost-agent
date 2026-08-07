@@ -45,6 +45,8 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 .tone-blue { --tone: var(--blue); }
 .tone-violet { --tone: var(--violet); }
 .tone-red { --tone: var(--red); }
+.pnl-pos { color: var(--green); }
+.pnl-neg { color: var(--red); }
 .volume-progress { margin-top: 14px; padding: 18px 22px; }
 .volume-progress > div:first-child { display: flex; justify-content: space-between; color: var(--muted); }
 .volume-progress b { color: var(--text); }
@@ -111,3 +113,18 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 .log .info { color: var(--cyan); }
 @media (max-width: 900px) { .metrics { grid-template-columns: 1fr 1fr; } .market-strip { grid-template-columns: 1fr 1fr; } .grid.two, .grid.lower { grid-template-columns: 1fr; } .hero { align-items: flex-start; flex-direction: column; } .hero-metric { text-align: left; } }
 @media (max-width: 560px) { .shell { width: min(100% - 24px, 1440px); } .topbar { align-items: flex-start; flex-direction: column; } .metrics { grid-template-columns: 1fr; } .risk-list { grid-template-columns: 1fr; } .header-actions { flex-wrap: wrap; } }
+
+.hidden { display: none !important; }
+.tabs { display: flex; gap: 8px; margin-top: 20px; padding: 5px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.025); }
+.tab { flex: 1; cursor: pointer; padding: 10px 14px; border: 1px solid transparent; border-radius: 9px; color: var(--muted); background: transparent; font-weight: 750; font-size: 13px; }
+.tab.active { color: var(--text); border-color: #3a4631; background: rgba(181,245,28,.07); box-shadow: 0 0 0 3px rgba(181,245,28,.06); }
+.hero-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 18px; }
+.aeon-hero { min-height: 245px; }
+.aeon-pill { color: var(--amber); border-color: #54452c; background: rgba(255,200,87,.07); }
+.maker-pill { color: var(--green); border-color: #3a4631; background: rgba(181,245,28,.07); }
+.leaderboard-card { margin-top: 14px; }
+.leaderboard-table th:first-child, .leaderboard-table td:first-child { width: 64px; }
+.leaderboard-table td:nth-child(3), .leaderboard-table td:nth-child(4), .leaderboard-table td:nth-child(5), .leaderboard-table td:nth-child(6) { text-align: right; }
+.leaderboard-table td:nth-child(2) { color: var(--muted); }
+.row-self { background: rgba(181,245,28,.08); }
+.row-self b { color: var(--green); }

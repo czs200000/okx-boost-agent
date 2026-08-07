@@ -1,0 +1,15 @@
+{
+  "name": "okx-boost-agent-testnet-deploy",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "deploy": "node --env-file-if-exists=.env deploy.js",
+    "seed": "node --env-file-if-exists=.env seed.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.4",
+    "solc": "^0.8.27"
+  }
+}

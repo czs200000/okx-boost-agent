@@ -145,15 +145,16 @@ test("autonomous strategy buys NVDAx from a discounted executable ask", () => {
   assert.equal(plan.amountUsd, 150);
 });
 
-test("autonomous strategy rejects a discounted ask when the executable bid is falling", () => {
+test("autonomous strategy can layer into a discounted ask while the executable bid is falling", () => {
   const plan = autonomousPlan(
     { prices: {}, wallet: { assets: [] } },
     { position: null, executableQuoteHistory: { NVDAx: [
       { askUnitUsd: 100, bidUnitUsd: 100 }, { askUnitUsd: 100, bidUnitUsd: 99.9 }, { askUnitUsd: 99.5, bidUnitUsd: 99.7 }
     ] } },
-    { tradeUsd: 150, tokenTradeCapsUsd: { NVDAx: 150, SNDKx: 50 }, maxSlippageBps: 15, executableQuoteMinSamples: 3, nvdaEntrySignalBps: 1, maxEntryDowntrendBps: 5 }
+    { tradeUsd: 150, tokenTradeCapsUsd: { NVDAx: 150, SNDKx: 50 }, maxSlippageBps: 15, executableQuoteMinSamples: 3, nvdaEntrySignalBps: 1, maxGridLotsPerToken: 3, maxOpenGridLots: 6 }
   );
-  assert.equal(plan.action, "HOLD");
+  assert.equal(plan.action, "BUY");
+  assert.equal(plan.token, "NVDAx");
 });
 
 test("SNDKx requires a strong executable discount and is capped at 50 USDT", () => {
@@ -167,6 +168,93 @@ test("SNDKx requires a strong executable discount and is capped at 50 USDT", () 
   assert.equal(plan.action, "BUY");
   assert.equal(plan.token, "SNDKx");
   assert.equal(plan.amountUsd, 50);
+});
+
+test("autonomous strategy allows another same-token grid lot below the lot cap", () => {
+  const plan = autonomousPlan(
+    { prices: {}, wallet: { assets: [] } },
+    {
+      positionLots: { NVDAx: [{ id: "lot-1", token: "NVDAx", amount: 0.5, entryCostUsd: 150, entryAskUnitUsd: 100.5 }] },
+      positions: { NVDAx: { token: "NVDAx", amount: 0.5, entryCostUsd: 150 } },
+      executableQuoteHistory: { NVDAx: [
+        { askUnitUsd: 100, bidUnitUsd: 99.8, roundTripLossBps: 2 },
+        { askUnitUsd: 100, bidUnitUsd: 99.8, roundTripLossBps: 2 },
+        { askUnitUsd: 99.85, bidUnitUsd: 99.7, roundTripLossBps: 2 }
+      ] }
+    },
+    { tradeUsd: 150, tokenTradeCapsUsd: { NVDAx: 150 }, maxSlippageBps: 15, executableQuoteMinSamples: 3, nvdaEntrySignalBps: 1, maxGridLotsPerToken: 3, maxOpenGridLots: 6 }
+  );
+  assert.equal(plan.action, "BUY");
+  assert.equal(plan.token, "NVDAx");
+});
+
+test("autonomous strategy ranks entries by net opportunity after round-trip cost", () => {
+  const now = new Date().toISOString();
+  const plan = autonomousPlan(
+    { prices: {}, wallet: { assets: [] } },
+    { position: null, executableQuoteHistory: {
+      NVDAx: [
+        { at: now, askUnitUsd: 100, bidUnitUsd: 99.9, roundTripLossBps: 2 },
+        { at: now, askUnitUsd: 100, bidUnitUsd: 99.9, roundTripLossBps: 2 },
+        { at: now, askUnitUsd: 99.8, bidUnitUsd: 99.7, roundTripLossBps: 10 }
+      ],
+      SPCXx: [
+        { at: now, askUnitUsd: 100, bidUnitUsd: 99.9, roundTripLossBps: 2 },
+        { at: now, askUnitUsd: 100, bidUnitUsd: 99.9, roundTripLossBps: 2 },
+        { at: now, askUnitUsd: 99.85, bidUnitUsd: 99.8, roundTripLossBps: 2 }
+      ]
+    } },
+    {
+      tradeUsd: 150, tokenTradeCapsUsd: { NVDAx: 150, SPCXx: 50 }, maxSlippageBps: 15,
+      executableQuoteMinSamples: 3, nvdaEntrySignalBps: 1, spcxEntrySignalBps: 1,
+      maxEntryRoundTripLossBps: 12, minEntryEfficiencyBps: 0.5, maxExecutableQuoteAgeMs: 90000
+    }
+  );
+  assert.equal(plan.action, "BUY");
+  assert.equal(plan.token, "SPCXx");
+  assert.match(plan.reason, /net opportunity/);
+});
+
+test("autonomous strategy does not stack a grid lot at nearly the same price", () => {
+  const now = new Date().toISOString();
+  const plan = autonomousPlan(
+    { prices: {}, wallet: { assets: [] } },
+    {
+      positionLots: { NVDAx: [{ id: "lot-1", token: "NVDAx", amount: 0.5, entryCostUsd: 50, entryAskUnitUsd: 100 }] },
+      executableQuoteHistory: { NVDAx: [
+        { at: now, askUnitUsd: 100.2, bidUnitUsd: 100.1, roundTripLossBps: 2 },
+        { at: now, askUnitUsd: 100.2, bidUnitUsd: 100.1, roundTripLossBps: 2 },
+        { at: now, askUnitUsd: 99.99, bidUnitUsd: 99.9, roundTripLossBps: 2 }
+      ] }
+    },
+    {
+      tradeUsd: 150, tokenTradeCapsUsd: { NVDAx: 150 }, maxSlippageBps: 15,
+      executableQuoteMinSamples: 3, nvdaEntrySignalBps: 1, maxGridLotsPerToken: 3,
+      maxOpenGridLots: 6, minGridLayerSpacingBps: 3, maxEntryRoundTripLossBps: 12,
+      minEntryEfficiencyBps: 0.5, maxExecutableQuoteAgeMs: 90000
+    }
+  );
+  assert.equal(plan.action, "HOLD");
+});
+
+test("autonomous strategy exits the profitable lot and keeps losing lots open", () => {
+  const plan = autonomousPlan(
+    { prices: {}, wallet: { assets: [] } },
+    {
+      positionLots: { NVDAx: [
+        { id: "lot-low", token: "NVDAx", amount: 0.7, entryCostUsd: 150 },
+        { id: "lot-high", token: "NVDAx", amount: 0.6, entryCostUsd: 150 }
+      ] },
+      executableExitQuotes: {
+        "lot-low": { exitProceedsUsd: 150.08, netExitBps: 5.33 },
+        "lot-high": { exitProceedsUsd: 149.5, netExitBps: -33.33 }
+      }
+    },
+    { tradeUsd: 150, tokenTradeCapsUsd: { NVDAx: 150 }, maxSlippageBps: 15, minNetExitBps: 2 }
+  );
+  assert.equal(plan.action, "SELL");
+  assert.equal(plan.lotId, "lot-low");
+  assert.equal(plan.amountToken, 0.7);
 });
 
 test("reward-adjusted economics accepts a low-cost genuine edge", () => {
@@ -257,6 +345,15 @@ test("sell amount is rounded down below the wallet balance", () => {
   );
   assert.ok(Number(pair.amount) <= 0.024753336649506561);
   assert.equal(pair.amount, "0.024753336649");
+});
+
+test("sell amount can target a single grid lot below the wallet balance", () => {
+  const executor = new AgenticWalletExecutor({ tokens: { NVDAx: "0xc845b2894dbddd03858fd2d643b4ef725fe0849d" } });
+  const pair = executor.resolve(
+    { action: "SELL", token: "NVDAx", amountUsd: 10, amountToken: 0.01 },
+    { wallet: { assets: [{ tokenAddress: "0xc845b2894dbddd03858fd2d643b4ef725fe0849d", balance: "0.024753336649506561" }] } }
+  );
+  assert.equal(pair.amount, "0.010000000000");
 });
 
 test("sell exits are not blocked when their value grew above the entry cap", () => {

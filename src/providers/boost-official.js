@@ -20,6 +20,8 @@ export function parseOfficialBoostResponse(personalPayload, rankPayload = null, 
     volumeUsd,
     rank: finiteNumber(mine.currentRank ?? data.currentRank ?? data.myRank),
     estimatedRewardUsd: finiteNumber(mine.expectedRewards ?? data.myExpectedReward) ?? 0,
+    expectedRewardTokens: finiteNumber(mine.expectedRewards) ?? 0,
+    rewardTokenSymbol: mine.rewardUnit || data.rewardTokenName || null,
     participationStatus: finiteNumber(data.participationStatus),
     minVolumeToRankUsd: finiteNumber(data.minVolumeToRank),
     nextTierVolumeUsd: finiteNumber(data.nextTierMetric),
@@ -49,4 +51,42 @@ export async function readOfficialBoostStatus({ activityId, walletAddress, fetch
   if (!personalResponse.ok) throw new Error(`OKX Boost API HTTP ${personalResponse.status}`);
   if (!rankResponse.ok) throw new Error(`OKX Boost rank API HTTP ${rankResponse.status}`);
   return parseOfficialBoostResponse(await personalResponse.json(), await rankResponse.json());
+}
+
+export async function readCompetitionRanking({ activityId, sortType = 5, walletAddress = null, limit = 20, fetchImpl = fetch }) {
+  const url = new URL(`${baseUrl}/queryPnlRank`);
+  url.searchParams.set("activityId", String(activityId));
+  url.searchParams.set("sortType", String(sortType));
+  url.searchParams.set("tab", "1");
+  if (walletAddress) url.searchParams.set("walletAddress", walletAddress);
+  const response = await fetchImpl(url, {
+    headers: { accept: "application/json", "user-agent": "OKX-Boost-Agent-Dashboard/0.1" },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!response.ok) throw new Error(`OKX Boost rank API HTTP ${response.status}`);
+  const payload = await response.json();
+  if (Number(payload?.code) !== 0) throw new Error(payload?.msg || payload?.detailMsg || "OKX Boost rank API rejected the request");
+  const data = payload?.data || {};
+  const rows = (data.pnlRankInfos || [])
+    .slice(0, Math.max(1, Math.min(1000, Number(limit) || 20)))
+    .map(row => ({
+      rank: finiteNumber(row.currentRank),
+      walletAddress: row.walletAddress || null,
+      nickName: row.nickName || null,
+      volumeUsd: finiteNumber(row.volume),
+      realizedProfitUsd: finiteNumber(row.realizedProfit),
+      expectedRewards: finiteNumber(row.expectedRewards),
+      rewardUnit: row.rewardUnit || null
+    }));
+  const mine = data.myPnlRankInfo || {};
+  return {
+    leaderboard: rows,
+    myRankInfo: {
+      rank: finiteNumber(mine.currentRank) || 0,
+      volumeUsd: finiteNumber(mine.volume) || 0,
+      expectedRewards: finiteNumber(mine.expectedRewards) || 0,
+      realizedProfitUsd: finiteNumber(mine.realizedProfit)
+    },
+    updatedAt: finiteNumber(data.rankUpdateTime) ? new Date(data.rankUpdateTime).toISOString() : null
+  };
 }
