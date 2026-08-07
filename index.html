@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OKX Boost Agent — AI Market-Making on X Layer</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      font-family: -apple-system, "PingFang SC", "Segoe UI", Roboto, sans-serif;
+      background: #0b0f1a; color: #e8ecf4; line-height: 1.6; padding: 40px 20px;
+    }
+    .wrap { max-width: 900px; margin: 0 auto; }
+    .badge {
+      display: inline-block; background: #1f2b4a; border: 1px solid #33436e;
+      color: #9db8ff; border-radius: 999px; padding: 4px 12px; font-size: 13px; margin-bottom: 18px;
+    }
+    h1 { font-size: 34px; letter-spacing: -0.5px; margin-bottom: 12px; }
+    .sub { color: #a8b3c7; font-size: 17px; margin-bottom: 30px; }
+    .card {
+      background: #131a2b; border: 1px solid #22304f; border-radius: 14px; padding: 22px; margin-bottom: 18px;
+    }
+    h2 { font-size: 19px; margin-bottom: 10px; color: #cfe0ff; }
+    ul { padding-left: 20px; color: #c3cddd; }
+    li { margin-bottom: 6px; }
+    a { color: #6f9dff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      background: #1c2742; border: 1px solid #2c3b63; border-radius: 6px;
+      padding: 2px 7px; font-size: 13px; word-break: break-all;
+    }
+    .row { display: flex; gap: 14px; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 220px; }
+    footer { margin-top: 26px; color: #66708a; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="badge">OKX Build X · AI Season Hackathon</span>
+    <h1>OKX Boost Agent</h1>
+    <p class="sub">An AI market-making agent for X Layer: DeepSeek-driven decisions, 0-gas execution,
+      and an on-chain audit ledger so every trade is verifiable.</p>
+
+    <div class="card">
+      <h2>What it does</h2>
+      <ul>
+        <li>Runs limit-order market making on X Layer (e.g. NVDAx/USDT) with strict buy/sell alternation and inventory-neutral rotation.</li>
+        <li>Uses a large language model (DeepSeek) as an advisor, with deterministic local risk controls as the final authority.</li>
+        <li>Trades with 0 gas / 0 service fees via OKX DEX on X Layer.</li>
+        <li>Records every decision on-chain in an auditable ledger (this contract), including action, token, price and timestamp.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>On-chain ledger (X Layer testnet)</h2>
+      <p style="margin-bottom:10px">The agent writes its decisions to
+        <code id="contractAddress">loading…</code> — verify on the
+        <a href="https://www.okx.com/web3/explorer/xlayer-test" target="_blank" rel="noopener">X Layer testnet explorer</a>.</p>
+      <p style="color:#a8b3c7;font-size:14px">Contract events: <code>DecisionRecorded(action, token, price, timestamp)</code> and <code>Heartbeat</code>.</p>
+    </div>
+
+    <div class="card">
+      <h2>Architecture</h2>
+      <div class="row">
+        <div>
+          <ul>
+            <li><b>AI advisor</b> — DeepSeek API</li>
+            <li><b>Decision core</b> — deterministic strategy + risk gates</li>
+            <li><b>Execution</b> — OKX Agentic Wallet / OKX DEX, X Layer</li>
+          </ul>
+        </div>
+        <div>
+          <ul>
+            <li><b>On-chain audit</b> — OKXBoostAgentLedger</li>
+            <li><b>Control room</b> — local dashboard (UI)</li>
+            <li><b>Data</b> — live prices, liquidity, leaderboard sync</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Links</h2>
+      <ul>
+        <li>GitHub: <a href="https://github.com/czs200000/okx-boost-agent" target="_blank" rel="noopener">github.com/czs200000/okx-boost-agent</a></li>
+        <li>X Layer testnet explorer: <a href="https://www.okx.com/web3/explorer/xlayer-test" target="_blank" rel="noopener">xlayer-test</a></li>
+        <li>Build X Series: <a href="https://web3.okx.com/zh-hans/xlayer/build-x-series" target="_blank" rel="noopener">web3.okx.com/zh-hans/xlayer/build-x-series</a></li>
+      </ul>
+    </div>
+
+    <footer>Experimental software for hackathon purposes. Not financial advice. Trading can lose money.</footer>
+  </div>
+
+  <script>
+    // Pull the deployed address from the repo JSON when served from GitHub Pages.
+    fetch("./deployed.json").then(r => r.json()).then(d => {
+      document.getElementById("contractAddress").textContent = d.address;
+    }).catch(() => {
+      document.getElementById("contractAddress").textContent = "see deployments/deployed.json";
+    });
+  </script>
+</body>
+</html>
