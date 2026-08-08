@@ -396,70 +396,6 @@ function exportFinanceJson() {
   }).catch(error => console.error(error));
 }
 
-const AI_VERDICT_LABEL = { resume: "可恢复交易", pause: "继续暂停", adjust: "建议调整参数" };
-const AI_VERDICT_CLASS = { resume: "verdict-resume", pause: "verdict-pause", adjust: "verdict-adjust" };
-const AI_TRIGGER_LABEL = { manual: "手动分析", cooldown: "熔断冷却", breaker: "硬止损", timer: "定时检查" };
-
-async function refreshAiAnalysis() {
-  try { renderAiAnalysis(await api("/api/ai/analysis")); }
-  catch (error) { console.error(error); }
-}
-
-function renderAiAnalysis(payload) {
-  const { configured, token, last, history, regime, makerRunning } = payload;
-  el("aiStatus").textContent = configured ? `${token} · DeepSeek 已配置` : "DeepSeek 未配置";
-  el("aiStatus").className = configured ? "pill" : "pill warn";
-  el("aiRegime").textContent = regime
-    ? `趋势 ${Number(regime.trendBps).toFixed(1)}bps · 波动 ${Number(regime.rangeBps).toFixed(1)}bps`
-    : "样本采集中";
-  if (!last) {
-    el("aiVerdict").textContent = "—";
-    el("aiVerdict").className = "";
-    el("aiConfidence").textContent = "—";
-    el("aiTime").textContent = "—";
-    el("aiTrigger").textContent = "—";
-    el("aiReasons").innerHTML = "<li>尚未分析：熔断时自动触发，或点击「立即 AI 分析」手动分析</li>";
-    el("aiParams").innerHTML = "<div class='ai-params-empty'>—</div>";
-    el("aiHistory").innerHTML = "<div class='log'><span class='info'>暂无历史</span></div>";
-    return;
-  }
-  el("aiVerdict").textContent = AI_VERDICT_LABEL[last.verdict] || last.verdict;
-  el("aiVerdict").className = AI_VERDICT_CLASS[last.verdict] || "";
-  el("aiConfidence").textContent = `${Math.round(Number(last.confidence || 0) * 100)}%`;
-  el("aiTime").textContent = new Date(last.at).toLocaleString();
-  el("aiTrigger").textContent = AI_TRIGGER_LABEL[last.trigger] || last.trigger;
-  el("aiReasons").innerHTML = (last.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("") || "<li>暂无理由</li>";
-  const params = last.suggestedParams;
-  const PARAM_LABEL = { legUsd: "单笔金额", buyTriggerBps: "买入价差", sellTriggerBps: "卖出价差", stopLossBps: "止损", cooldownMinutes: "冷却分钟" };
-  el("aiParams").innerHTML = params && Object.keys(params).length
-    ? Object.entries(params).map(([k, v]) => `<span class="ai-param-chip">${escapeHtml(PARAM_LABEL[k] || k)} ${escapeHtml(String(v))}</span>`).join("")
-    : "<span class='ai-params-empty'>无调整建议</span>";
-  el("aiHistory").innerHTML = (history || []).map(h => `
-    <div class="log">
-      <span class="info ${AI_VERDICT_CLASS[h.verdict] || ""}">${AI_VERDICT_LABEL[h.verdict] || h.verdict} · 置信 ${Math.round(Number(h.confidence || 0) * 100)}%</span>
-      <div>${new Date(h.at).toLocaleString()} · ${AI_TRIGGER_LABEL[h.trigger] || h.trigger}${h.reasons?.length ? ` · ${h.reasons[0]}` : ""}</div>
-    </div>`).join("") || "<div class='log'><span class='info'>暂无历史</span></div>";
-}
-
-async function runAiAnalysis() {
-  const button = el("aiRunButton");
-  const status = el("aiStatus");
-  button.disabled = true;
-  status.textContent = "分析中…";
-  status.className = "pill warn";
-  try {
-    const result = await api("/api/ai/analysis/run", { method: "POST", body: "{}" });
-    status.textContent = "分析完成";
-    status.className = "pill";
-    await refreshAiAnalysis();
-  } catch (error) {
-    status.textContent = `失败: ${error.message}`;
-    status.className = "pill warn";
-  } finally {
-    button.disabled = false;
-  }
-}
-
 function updateControls(running) {
   const start = el("startButton");
   const stop = el("stopButton");
@@ -533,7 +469,6 @@ el("tabMaker").addEventListener("click", () => activateTab("maker"));
 el("tabFinance").addEventListener("click", () => { activateTab("finance"); refreshFinance(); });
 el("financeExportCsv").addEventListener("click", exportFinanceCsv);
 el("financeExportJson").addEventListener("click", exportFinanceJson);
-el("aiRunButton").addEventListener("click", runAiAnalysis);
 
 function activateTab(name) {
   el("panelXlayer").classList.toggle("hidden", name !== "xlayer");
@@ -560,11 +495,9 @@ refresh();
 refreshMaker();
 renderHackathon();
 refreshFinance();
-refreshAiAnalysis();
 setInterval(refreshLive, 2000);
 setInterval(refresh, 15000);
 setInterval(refreshMakerLive, 4000);
 setInterval(refreshMaker, 15000);
 setInterval(renderHackathon, 30000);
 setInterval(refreshFinance, 30000);
-setInterval(refreshAiAnalysis, 30000);

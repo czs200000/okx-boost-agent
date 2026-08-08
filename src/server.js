@@ -22,7 +22,6 @@ import { usEquitySession } from "./core/us-equity-session.js";
 import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timing.js";
 import { reconcileTradeAccounting } from "./core/trade-accounting.js";
 import { makerDecision, shouldCancelMakerOrder } from "./core/maker.js";
-import { AiVerdictProvider, summarizeKlines, usSessionLabel, applySuggestedParams } from "./core/ai-analysis.js";
 
 const execFileAsync = promisify(execFile);
 const onchainosCli = process.env.ONCHAINOS_CLI || "onchainos";
@@ -36,7 +35,6 @@ const runOnchainos = args => new Promise(resolve => {
 const root = join(fileURLToPath(new URL("..", import.meta.url)), "public");
 const store = new MemoryStore();
 const deepseek = new DeepSeekProvider(config.deepseek);
-const aiVerdict = new AiVerdictProvider(config.deepseek);
 let cycleBusy = false;
 let officialSyncBusy = false;
 let marketPollBusy = false;
@@ -1021,28 +1019,15 @@ async function maybeAutoResumeMaker(trigger) {
   if (state.running || state.stopReason !== "breaker_max_loss") return;
   if (!config.maker.breakerAutoResume) return;
   if (Date.now() < Number(state.breakerNextCheckAt || 0)) return;
-  let result;
+  let trend;
   try {
-    result = await runMakerAiAnalysis(trigger);
-    makerStore.log(`Breaker AI verdict: ${result.verdict} (conf ${result.confidence.toFixed(2)}) — ${result.reasons.join("; ")}`, "info");
+    trend = await analyzeMakerKlineTrend();
   } catch (error) {
-    makerStore.log(`Breaker AI analysis failed (${error.message}) — falling back to K-line rule`, "warn");
-    let trend;
-    try {
-      trend = await analyzeMakerKlineTrend();
-    } catch {
-      makerStore.update({ breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs });
-      return;
-    }
-    result = {
-      verdict: trend.ok && trend.favorable ? "resume" : "pause",
-      confidence: 0.5,
-      reasons: ["AI unavailable; K-line rule fallback"],
-      suggestedParams: null
-    };
+    makerStore.log(`Breaker K-line check failed: ${error.message} — recheck later`, "warn");
+    makerStore.update({ breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs });
+    return;
   }
-  if (result.verdict === "resume" || result.verdict === "adjust") {
-    const applied = result.verdict === "adjust" ? applySuggestedParams(config.maker, result.suggestedParams) : [];
+  if (trend.ok && trend.favorable) {
     makerStore.update({
       running: true,
       realizedPnlUsd: 0,
@@ -1051,80 +1036,11 @@ async function maybeAutoResumeMaker(trigger) {
       stopReason: null,
       breakerNextCheckAt: 0
     });
-    makerStore.log(
-      `Breaker auto-resume: ${result.verdict} (conf ${result.confidence.toFixed(2)}) — restarting (${trigger})${applied.length ? `; applied params: ${applied.join(", ")}` : ""}`,
-      "info"
-    );
+    makerStore.log(`Breaker auto-resume: K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps — restarting (${trigger})`, "info");
   } else {
     makerStore.update({ breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs });
-    makerStore.log(`Breaker stays paused: AI verdict pause (conf ${result.confidence.toFixed(2)}) — recheck in ${Math.round(config.maker.breakerCheckMs / 60000)}min`, "warn");
+    makerStore.log(`Breaker stays paused: ${trend.ok ? `K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps` : trend.reason} — recheck in ${Math.round(config.maker.breakerCheckMs / 60000)}min`, "warn");
   }
-}
-
-async function fetchMakerKlines() {
-  const bars = [["15m", 24], ["1H", 24], ["4H", 12]];
-  const result = {};
-  for (const [bar, limit] of bars) {
-    const { payload } = await runOnchainos([
-      "market", "kline", "--address", config.maker.tokenAddress,
-      "--chain", "xlayer", "--bar", bar, "--limit", String(limit)
-    ]);
-    result[bar] = (payload?.data || [])
-      .filter(c => Number(c.confirm) === 1)
-      .slice(0, limit)
-      .map(c => ({ t: Number(c.ts), o: Number(c.o), h: Number(c.h), l: Number(c.l), c: Number(c.c), v: Number(c.volUsd || 0) }));
-  }
-  return result;
-}
-
-async function runMakerAiAnalysis(trigger = "manual") {
-  const maker = makerStore.read();
-  const klines = await fetchMakerKlines();
-  const price = Number(maker.lastDecision?.price || 0);
-  const recentTrades = (maker.trades || [])
-    .filter(t => !t.token || t.token === config.maker.token)
-    .slice(0, 20).map(t => ({
-    kind: t.kind,
-    price: Number(t.price || 0),
-    pnlUsd: t.pnlUsd == null ? null : Number(t.pnlUsd),
-    at: t.at,
-    token: t.token || config.maker.token
-  }));
-  const context = {
-    task: "Decide whether the OKX Boost market-making agent should resume trading after a circuit breaker.",
-    token: config.maker.token,
-    currentPrice: price,
-    regime: maker.regimeInfo || null,
-    lossStreak: maker.lossStreak,
-    realizedPnlUsd: maker.realizedPnlUsd,
-    stopReason: maker.stopReason || null,
-    usMarketSession: usSessionLabel(),
-    klines: {
-      "15m": summarizeKlines(klines["15m"]),
-      "1H": summarizeKlines(klines["1H"]),
-      "4H": summarizeKlines(klines["4H"])
-    },
-    recentTrades
-  };
-  const verdict = await aiVerdict.verdict(context);
-  const record = {
-    at: new Date().toISOString(),
-    trigger,
-    verdict: verdict.verdict,
-    confidence: verdict.confidence,
-    reasons: verdict.reasons,
-    suggestedParams: verdict.suggestedParams || null
-  };
-  makerStore.update({
-    aiAnalysis: record,
-    aiHistory: [record, ...(maker.aiHistory || [])].slice(0, 20)
-  });
-  return verdict;
-}
-
-function makerAiFresh(withinMs = 900000) {
-  const at = makerStore.read().aiAnalysis?.at;
-  return at && Date.now() - new Date(at).getTime() < withinMs;
 }
 
 async function makerListOrders() {
@@ -1309,23 +1225,12 @@ async function makerCycle(trigger = "timer") {
       if (Number(state.cooldownUntil || 0) <= Date.now()) {
         let cooldownMs = config.maker.cooldownMinutes * 60000;
         try {
-          const fresh = makerAiFresh(config.maker.breakerCheckMs);
-          const last = makerStore.read().aiAnalysis;
-          if (aiVerdict.configured && !fresh) {
-            const verdict = await runMakerAiAnalysis("cooldown");
-            if (verdict.verdict === "pause") cooldownMs = Math.max(cooldownMs, config.maker.breakerCheckMs);
-            makerStore.log(`Cooldown AI verdict: ${verdict.verdict} (conf ${verdict.confidence.toFixed(2)}) — cooldown ${Math.round(cooldownMs / 60000)}min`, "info");
-          } else if (fresh && last?.verdict === "pause") {
+          const trend = await analyzeMakerKlineTrend();
+          if (trend.ok && !trend.favorable) {
             cooldownMs = Math.max(cooldownMs, config.maker.breakerCheckMs);
-            makerStore.log(`Cooldown extended to ${Math.round(cooldownMs / 60000)}min (fresh AI verdict: pause)`, "warn");
+            makerStore.log(`Cooldown extended to ${Math.round(cooldownMs / 60000)}min: K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps`, "warn");
           }
-        } catch {
-          // Fall back to the rule-based K-line extension on analysis failure.
-          try {
-            const trend = await analyzeMakerKlineTrend();
-            if (trend.ok && !trend.favorable) cooldownMs = Math.max(cooldownMs, config.maker.breakerCheckMs);
-          } catch { /* keep default cooldown */ }
-        }
+        } catch { /* keep default cooldown on analysis failure */ }
         makerStore.update({ cooldownUntil: Date.now() + cooldownMs });
         makerStore.log(`Maker paused ${Math.round(cooldownMs / 60000)} min after ${config.maker.lossStreakLimit} losing round trips`, "warn");
       }
@@ -1919,27 +1824,6 @@ const server = http.createServer(async (request, response) => {
           updatedAt: onchain?.fetchedAt || null
         }
       });
-    }
-
-    if (request.method === "GET" && url.pathname === "/api/ai/analysis") {
-      const maker = makerStore.read();
-      return json(response, 200, {
-        configured: aiVerdict.configured,
-        token: config.maker.token,
-        last: maker.aiAnalysis || null,
-        history: maker.aiHistory || [],
-        regime: maker.regimeInfo || null,
-        makerRunning: maker.running
-      });
-    }
-    if (request.method === "POST" && url.pathname === "/api/ai/analysis/run") {
-      if (!aiVerdict.configured) return json(response, 400, { error: "DEEPSEEK_API_KEY is not configured" });
-      try {
-        const result = await runMakerAiAnalysis("manual");
-        return json(response, 200, { ok: true, result, last: makerStore.read().aiAnalysis });
-      } catch (error) {
-        return json(response, 500, { error: error.message });
-      }
     }
 
     const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
