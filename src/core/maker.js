@@ -17,6 +17,7 @@ export function makerDecision({
   stopLossBps = 15,
   targetGainBps = 10,
   downtrendPaused = false,
+  regimePaused = false,
   inventorySince = 0,
   now = Date.now(),
   maxHoldMs = 120000,
@@ -33,8 +34,11 @@ export function makerDecision({
     return { action: "HOLD", reason: "order already active" };
   }
   if (inventoryUsd < 1 && usdtBalanceUsd >= legUsd) {
-    if (downtrendPaused) {
+    if (downtrendPaused || regimePaused) {
+      if (downtrendPaused) {
       return { action: "HOLD", reason: "downtrend guard: buy paused" };
+      }
+      return { action: "HOLD", reason: "regime gate: no range window, buy paused" };
     }
     return {
       action: "BUY",

@@ -1058,6 +1058,30 @@ async function makerCycle(trigger = "timer") {
       makerStore.log(`Downtrend guard: ${trendDropBps.toFixed(1)} bps below anchor ${trendAnchorPrice.toFixed(4)} — buy paused`, "warn");
     }
 
+    // Regime gate: only open NEW positions when the token is range-bound
+    // (low trend, moderate oscillation). Profitable leaderboard wallets trade
+    // in short bursts only while such a window is open, then stop.
+    const regimeHistory = [...(state.makerPriceHistory || []), { at: Date.now(), price }]
+      .slice(-Math.max(60, Math.ceil(config.maker.regimeWindowMs / 10000)));
+    const regimeWindowStart = Date.now() - config.maker.regimeWindowMs;
+    const regimeWindow = regimeHistory.filter(p => Number(p.at) >= regimeWindowStart);
+    let regimePaused = false;
+    let regimeInfo = null;
+    const regimePrices = regimeWindow.map(p => Number(p.price)).filter(p => p > 0);
+    if (regimePrices.length >= config.maker.regimeMinSamples) {
+      const first = regimePrices[0];
+      const last = regimePrices[regimePrices.length - 1];
+      const lo = Math.min(...regimePrices);
+      const hi = Math.max(...regimePrices);
+      const trendBps = first > 0 ? (last / first - 1) * 10000 : 0;
+      const rangeBps = lo > 0 ? (hi / lo - 1) * 10000 : 0;
+      regimePaused = trendBps < -config.maker.regimeTrendBps || rangeBps > config.maker.regimeRangeMaxBps;
+      regimeInfo = { samples: regimePrices.length, trendBps, rangeBps };
+      if (regimePaused && !state.regimePaused) {
+        makerStore.log(`Regime gate: trend ${trendBps.toFixed(1)}bps / range ${rangeBps.toFixed(1)}bps — buy paused`, "warn");
+      }
+    }
+
     const hourUtc = new Date().getUTCHours();
     const pauseWindow = config.maker.pauseStartUtc < config.maker.pauseEndUtc
       && hourUtc >= config.maker.pauseStartUtc && hourUtc < config.maker.pauseEndUtc;
@@ -1173,7 +1197,8 @@ async function makerCycle(trigger = "timer") {
           now: Date.now(),
           maxHoldMs: config.maker.maxHoldMs,
           entryPrice: inventoryUnits > 0 ? costBasisUsd / inventoryUnits : 0,
-          downtrendPaused
+          downtrendPaused,
+          regimePaused
         });
     let orderInfo = null;
     if (decision.action === "BUY" && !activeOrder) {
@@ -1237,6 +1262,9 @@ async function makerCycle(trigger = "timer") {
       trendAnchorPrice,
       trendAnchorAt,
       downtrendPaused,
+      makerPriceHistory: regimeHistory,
+      regimePaused,
+      regimeInfo,
       lastDecision: {
         at: new Date().toISOString(),
         price,
