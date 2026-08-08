@@ -342,16 +342,26 @@ function renderFinance(payload) {
     </tr>`).join("");
 
   el("financeNotes").innerHTML = projects.map(p => {
+    const statusClass = p.status === "运行中" ? "" : "paused";
     const links = p.links
-      ? Object.entries(p.links).map(([k, v]) => `<a href="${v}" target="_blank" rel="noopener">${k}</a>`).join(" · ")
+      ? Object.entries(p.links).map(([k, v]) => `<a class="finance-link" href="${v}" target="_blank" rel="noopener">${escapeHtml(k)}</a>`).join("")
       : "";
-    const extra = p.rank != null
-      ? ` · 官方排名 ${p.rank}${p.estimatedRewardUsd ? ` · 预估奖励 ${money(p.estimatedRewardUsd)}` : ""}`
-      : "";
-    const note = p.note ? ` · ${escapeHtml(p.note)}` : "";
-    const start = p.startedAt ? ` · 启动 ${new Date(p.startedAt).toLocaleString()}` : "";
-    const counter = p.moduleCounterUsd != null ? ` · 当前模块计数 ${money(p.moduleCounterUsd)}` : "";
-    return `<div class="log"><span class="info">${escapeHtml(p.name)}</span><div>${escapeHtml(p.strategy)}${start}${counter}${note}${extra}${links ? " · " + links : ""}</div></div>`;
+    const items = [];
+    if (p.strategy) items.push(["策略", p.strategy]);
+    if (p.startedAt) items.push(["启动", new Date(p.startedAt).toLocaleString()]);
+    if (p.moduleCounterUsd != null) items.push(["模块计数", money(p.moduleCounterUsd)]);
+    if (p.rank != null) items.push(["官方排名", String(p.rank)]);
+    if (p.estimatedRewardUsd) items.push(["预估奖励", money(p.estimatedRewardUsd)]);
+    if (p.note) items.push(["备注", p.note]);
+    return `
+      <div class="finance-note">
+        <div class="finance-note-head">
+          <b>${escapeHtml(p.name)}</b>
+          <span class="status ${statusClass}"><i></i>${escapeHtml(p.status)}</span>
+        </div>
+        ${items.length ? `<div class="finance-note-grid">${items.map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`).join("")}</div>` : ""}
+        ${links ? `<div class="finance-note-links">${links}</div>` : ""}
+      </div>`;
   }).join("");
 
   const assets = (wallet.assets || []).filter(a => Number(a.usdValue) > 0.01).sort((a, b) => Number(b.usdValue) - Number(a.usdValue));

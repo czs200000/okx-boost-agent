@@ -150,3 +150,14 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 .finance-table tr:hover td { background: rgba(255,255,255,.025); }
 .finance-strategy { color: var(--muted); max-width: 260px; }
 .finance-table .status { white-space: nowrap; }
+.finance-note { background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+.finance-note:last-child { margin-bottom: 0; }
+.finance-note-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.finance-note-head b { font-size: 14px; }
+.finance-note-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 14px; }
+.finance-note-grid div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.finance-note-grid span { color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.finance-note-grid b { font-size: 12.5px; font-weight: 600; word-break: break-word; }
+.finance-note-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.finance-link { display: inline-block; padding: 4px 10px; border: 1px solid #33436e; border-radius: 999px; color: var(--cyan); font-size: 12px; text-decoration: none; }
+.finance-link:hover { background: rgba(111,157,255,.08); }
