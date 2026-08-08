@@ -151,6 +151,8 @@ export const config = Object.freeze({
     maxLossUsd: number("MAKER_MAX_LOSS_USD", 15),
     lossStreakLimit: number("MAKER_LOSS_STREAK_LIMIT", 3),
     cooldownMinutes: number("MAKER_COOLDOWN_MINUTES", 10),
+    cooldownRecheckMs: number("MAKER_COOLDOWN_RECHECK_MS", 300000),
+    klineCheckMs: number("MAKER_KLINE_CHECK_MS", 60000),
     slippagePct: number("MAKER_SLIPPAGE_PCT", 0.15),
     exitMaxSlippageBps: number("MAKER_EXIT_MAX_SLIPPAGE_BPS", 50)
   }

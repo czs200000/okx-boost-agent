@@ -22,6 +22,7 @@ import { usEquitySession } from "./core/us-equity-session.js";
 import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timing.js";
 import { reconcileTradeAccounting } from "./core/trade-accounting.js";
 import { makerDecision, shouldCancelMakerOrder } from "./core/maker.js";
+import { analyzeStabilization } from "./core/kline-analysis.js";
 
 const execFileAsync = promisify(execFile);
 const onchainosCli = process.env.ONCHAINOS_CLI || "onchainos";
@@ -992,25 +993,25 @@ const makerQuoteAddress = config.maker.quoteAddress;
 async function analyzeMakerKlineTrend() {
   const { payload } = await runOnchainos([
     "market", "kline", "--address", config.maker.tokenAddress,
-    "--chain", "xlayer", "--bar", "15m", "--limit", String(config.maker.breakerKlines)
+    "--chain", "xlayer", "--bar", "15m", "--limit", "48"
   ]);
   const candles = (payload?.data || [])
     .filter(c => Number(c.confirm) === 1)
-    .slice(0, config.maker.breakerKlines);
-  if (candles.length < 4) return { ok: false, reason: `insufficient klines (${candles.length})` };
-  const first = Number(candles[candles.length - 1].o);
-  const last = Number(candles[0].c);
-  const hi = Math.max(...candles.map(c => Number(c.h)));
-  const lo = Math.min(...candles.map(c => Number(c.l)));
-  const trendBps = first > 0 ? (last / first - 1) * 10000 : 0;
-  const rangeBps = lo > 0 ? (hi / lo - 1) * 10000 : 0;
+    .slice(0, 48)
+    .reverse() // API returns newest-first; indicators need oldest -> newest
+    .map(c => ({ o: Number(c.o), h: Number(c.h), l: Number(c.l), c: Number(c.c), t: Number(c.ts) }));
+  const analysis = analyzeStabilization(candles);
+  if (!analysis.ok) return { ok: false, reason: analysis.reason };
   return {
     ok: true,
-    candles: candles.length,
-    trendBps,
-    rangeBps,
-    last,
-    favorable: trendBps > config.maker.breakerTrendBps && rangeBps < config.maker.breakerRangeMaxBps
+    stable: analysis.stable,
+    favorable: analysis.stable,
+    score: analysis.score,
+    total: analysis.total,
+    reasons: analysis.reasons,
+    metrics: analysis.metrics,
+    trendBps: Number(analysis.metrics.ema8SlopeBps || 0),
+    rangeBps: Number(analysis.metrics.bollingerWidthBps || 0)
   };
 }
 
@@ -1223,20 +1224,34 @@ async function makerCycle(trigger = "timer") {
       // Only start the cool-down once; afterwards the local streak resets so the
       // later store update cannot re-arm it on every cycle.
       if (Number(state.cooldownUntil || 0) <= Date.now()) {
-        let cooldownMs = config.maker.cooldownMinutes * 60000;
-        try {
-          const trend = await analyzeMakerKlineTrend();
-          if (trend.ok && !trend.favorable) {
-            cooldownMs = Math.max(cooldownMs, config.maker.breakerCheckMs);
-            makerStore.log(`Cooldown extended to ${Math.round(cooldownMs / 60000)}min: K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps`, "warn");
-          }
-        } catch { /* keep default cooldown on analysis failure */ }
-        makerStore.update({ cooldownUntil: Date.now() + cooldownMs });
-        makerStore.log(`Maker paused ${Math.round(cooldownMs / 60000)} min after ${config.maker.lossStreakLimit} losing round trips`, "warn");
+        makerStore.update({
+          cooldownUntil: Date.now() + config.maker.cooldownMinutes * 60000,
+          cooldownActive: true,
+          klineCheckAt: Date.now() + config.maker.klineCheckMs
+        });
+        makerStore.log(`Maker paused ${config.maker.cooldownMinutes} min after ${config.maker.lossStreakLimit} losing round trips — monitoring K-line stabilization`, "warn");
       }
       lossStreak = 0;
     }
     const inCooldown = Number(state.cooldownUntil || 0) > Date.now();
+    // During/after the cooldown, analyze the K-line every klineCheckMs and
+    // resume as soon as short-term indicators show the market has stabilized.
+    let cooldownBlock = inCooldown || state.cooldownActive === true;
+    if (cooldownBlock) {
+      if (Date.now() >= Number(state.klineCheckAt || 0)) {
+        makerStore.update({ klineCheckAt: Date.now() + config.maker.klineCheckMs });
+        let st;
+        try { st = await analyzeMakerKlineTrend(); } catch (error) { st = { ok: false, reason: error.message }; }
+        if (st.ok && st.stable) {
+          makerStore.update({ cooldownUntil: 0, cooldownActive: false });
+          makerStore.log(`K线企稳（${st.score}/${st.total}）— 提前恢复交易：${st.reasons.join("；")}`, "info");
+          cooldownBlock = false;
+        } else if (Date.now() >= Number(state.cooldownUntil || 0)) {
+          makerStore.update({ cooldownUntil: Date.now() + config.maker.cooldownRecheckMs, cooldownActive: true });
+          makerStore.log(`冷却期已到但K线未企稳（${st.ok ? `${st.score}/${st.total}` : st.reason}）— 继续等待 ${Math.round(config.maker.cooldownRecheckMs / 60000)} 分钟`, "warn");
+        }
+      }
+    }
     if (realizedPnlUsd <= -config.maker.maxLossUsd) {
       makerStore.update({
         running: false,
@@ -1255,7 +1270,7 @@ async function makerCycle(trigger = "timer") {
           inventoryUnits,
           inventoryUsd,
           usdtBalanceUsd,
-          activeOrder: Boolean(activeOrder) || inCooldown,
+          activeOrder: Boolean(activeOrder) || cooldownBlock,
           pauseWindow,
           maxInventoryUsd: config.maker.maxInventoryUsd,
           legUsd: config.maker.legUsd,
@@ -1712,7 +1727,7 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request);
       if (!['start', 'pause', 'stop'].includes(body.action)) return json(response, 400, { error: "Invalid action" });
       makerStore.update(body.action === "start"
-        ? { running: true, cooldownUntil: 0, lossStreak: 0 }
+        ? { running: true, cooldownUntil: 0, lossStreak: 0, cooldownActive: false }
         : { running: false });
       makerStore.log(`Maker workflow ${body.action} requested`);
       if (body.action === "start") setImmediate(() => makerCycle("manual-start"));
