@@ -1168,6 +1168,7 @@ async function makerCycle(trigger = "timer") {
           sellTriggerBps: config.maker.sellTriggerBps,
           fastExitTriggerBps: config.maker.fastExitTriggerBps,
           stopLossBps: config.maker.stopLossBps,
+          targetGainBps: config.maker.targetGainBps,
           inventorySince: nextInventorySince,
           now: Date.now(),
           maxHoldMs: config.maker.maxHoldMs,
@@ -1204,10 +1205,12 @@ async function makerCycle(trigger = "timer") {
         if (exitExecution.status === "BROADCAST") {
           nextFastExitPending = true;
           orderInfo = { market: true, txHash: exitExecution.txHash, triggerPrice: null };
-          makerStore.log(`Maker fast-exit market sell ${decision.amountToken.toFixed(6)} NVDAx — ${exitExecution.txHash}`);
+          makerStore.log(`Maker fast-exit market sell ${decision.amountToken.toFixed(6)} ${config.maker.token} — ${exitExecution.txHash}`);
         } else if (exitExecution.status === "CONFIRMING") {
           makerStore.update({ running: false, pendingConfirmation: { at: new Date().toISOString(), plan: exitPlan, quote: exitQuote, message: exitExecution.message, next: exitExecution.next } });
           makerStore.log(`Maker wallet confirmation required: ${exitExecution.message}`, "warn");
+        } else {
+          makerStore.log(`Maker fast-exit failed (${exitExecution.status || "unknown"}): ${exitExecution.message || exitExecution.error || "no error detail"}`, "error");
         }
       }
     } else if (decision.action === "SELL" && !activeOrder) {

@@ -15,6 +15,8 @@ export function makerDecision({
   sellTriggerBps = 3,
   fastExitTriggerBps = 2,
   stopLossBps = 15,
+  targetGainBps = 10,
+  downtrendPaused = false,
   inventorySince = 0,
   now = Date.now(),
   maxHoldMs = 120000,
@@ -31,6 +33,9 @@ export function makerDecision({
     return { action: "HOLD", reason: "order already active" };
   }
   if (inventoryUsd < 1 && usdtBalanceUsd >= legUsd) {
+    if (downtrendPaused) {
+      return { action: "HOLD", reason: "downtrend guard: buy paused" };
+    }
     return {
       action: "BUY",
       triggerPrice: price * (1 - Number(buyTriggerBps) / 10000),
@@ -62,12 +67,18 @@ export function makerDecision({
         fastExit: true
       };
     }
+    // Profit-target exit: keep a resting limit sell at the higher of
+    // (mid + sellTriggerBps) or (entry + targetGainBps). This waits for the
+    // price to recover instead of force-exiting below cost on short dips.
+    const targetPrice = entryPrice > 0 ? entryPrice * (1 + Number(targetGainBps) / 10000) : 0;
+    const midPlus = price * (1 + Number(sellTriggerBps) / 10000);
+    const triggerPrice = Math.max(targetPrice, midPlus);
     return {
       action: "SELL",
-      triggerPrice: price * (1 + Number(sellTriggerBps) / 10000),
+      triggerPrice,
       amountUsd: null,
       amountToken: inventoryUnits,
-      reason: `inventory $${inventoryUsd.toFixed(2)}, sell trigger ${sellTriggerBps} bps above mid`
+      reason: `inventory $${inventoryUsd.toFixed(2)}, profit target ${targetGainBps} bps above cost ${entryPrice.toFixed(4)} (mid+${sellTriggerBps}bps)`
     };
   }
   return {
