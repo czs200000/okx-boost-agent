@@ -989,6 +989,60 @@ let makerTimer = null;
 const makerTokenAddress = config.maker.tokenAddress;
 const makerQuoteAddress = config.maker.quoteAddress;
 
+async function analyzeMakerKlineTrend() {
+  const { payload } = await runOnchainos([
+    "market", "kline", "--address", config.maker.tokenAddress,
+    "--chain", "xlayer", "--bar", "15m", "--limit", String(config.maker.breakerKlines)
+  ]);
+  const candles = (payload?.data || [])
+    .filter(c => Number(c.confirm) === 1)
+    .slice(0, config.maker.breakerKlines);
+  if (candles.length < 4) return { ok: false, reason: `insufficient klines (${candles.length})` };
+  const first = Number(candles[candles.length - 1].o);
+  const last = Number(candles[0].c);
+  const hi = Math.max(...candles.map(c => Number(c.h)));
+  const lo = Math.min(...candles.map(c => Number(c.l)));
+  const trendBps = first > 0 ? (last / first - 1) * 10000 : 0;
+  const rangeBps = lo > 0 ? (hi / lo - 1) * 10000 : 0;
+  return {
+    ok: true,
+    candles: candles.length,
+    trendBps,
+    rangeBps,
+    last,
+    favorable: trendBps > config.maker.breakerTrendBps && rangeBps < config.maker.breakerRangeMaxBps
+  };
+}
+
+async function maybeAutoResumeMaker(trigger) {
+  const state = makerStore.read();
+  if (state.running || state.stopReason !== "breaker_max_loss") return;
+  if (!config.maker.breakerAutoResume) return;
+  if (Date.now() < Number(state.breakerNextCheckAt || 0)) return;
+  let trend;
+  try {
+    trend = await analyzeMakerKlineTrend();
+  } catch (error) {
+    makerStore.log(`Breaker K-line check failed: ${error.message} — recheck later`, "warn");
+    makerStore.update({ breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs });
+    return;
+  }
+  if (trend.ok && trend.favorable) {
+    makerStore.update({
+      running: true,
+      realizedPnlUsd: 0,
+      lossStreak: 0,
+      cooldownUntil: 0,
+      stopReason: null,
+      breakerNextCheckAt: 0
+    });
+    makerStore.log(`Breaker auto-resume: K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps — restarting (${trigger})`, "info");
+  } else {
+    makerStore.update({ breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs });
+    makerStore.log(`Breaker stays paused: ${trend.ok ? `K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps` : trend.reason} — recheck in ${Math.round(config.maker.breakerCheckMs / 60000)}min`, "warn");
+  }
+}
+
 async function makerListOrders() {
   const { payload } = await runOnchainos(["strategy", "list", "--chain", "xlayer"]);
   if (!payload?.ok) throw new Error(payload?.error || "strategy list failed");
@@ -1014,7 +1068,11 @@ async function makerCancelOrder(orderId) {
 }
 
 async function makerCycle(trigger = "timer") {
-  if (makerCycleBusy || !makerStore.read().running) return;
+  if (makerCycleBusy) return;
+  if (!makerStore.read().running) {
+    await maybeAutoResumeMaker(trigger);
+    if (!makerStore.read().running) return;
+  }
   makerCycleBusy = true;
   try {
     const [wallet, snapshot] = await Promise.all([
@@ -1165,15 +1223,28 @@ async function makerCycle(trigger = "timer") {
       // Only start the cool-down once; afterwards the local streak resets so the
       // later store update cannot re-arm it on every cycle.
       if (Number(state.cooldownUntil || 0) <= Date.now()) {
-        makerStore.update({ cooldownUntil: Date.now() + config.maker.cooldownMinutes * 60000 });
-        makerStore.log(`Maker paused ${config.maker.cooldownMinutes} min after ${config.maker.lossStreakLimit} losing round trips`, "warn");
+        let cooldownMs = config.maker.cooldownMinutes * 60000;
+        try {
+          const trend = await analyzeMakerKlineTrend();
+          if (trend.ok && !trend.favorable) {
+            cooldownMs = Math.max(cooldownMs, config.maker.breakerCheckMs);
+            makerStore.log(`Cooldown extended to ${Math.round(cooldownMs / 60000)}min: K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps`, "warn");
+          }
+        } catch { /* keep default cooldown on analysis failure */ }
+        makerStore.update({ cooldownUntil: Date.now() + cooldownMs });
+        makerStore.log(`Maker paused ${Math.round(cooldownMs / 60000)} min after ${config.maker.lossStreakLimit} losing round trips`, "warn");
       }
       lossStreak = 0;
     }
     const inCooldown = Number(state.cooldownUntil || 0) > Date.now();
     if (realizedPnlUsd <= -config.maker.maxLossUsd) {
-      makerStore.update({ running: false });
-      makerStore.log(`Maker stopped: realized loss $${realizedPnlUsd.toFixed(2)} breached $${config.maker.maxLossUsd}`, "error");
+      makerStore.update({
+        running: false,
+        stopReason: "breaker_max_loss",
+        breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs
+      });
+      makerStore.log(`Maker stopped: realized loss $${realizedPnlUsd.toFixed(2)} breached $${config.maker.maxLossUsd} — K-line trend check scheduled`, "error");
+      await maybeAutoResumeMaker("breaker");
       return;
     }
 
