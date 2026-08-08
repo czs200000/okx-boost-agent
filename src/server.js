@@ -1191,7 +1191,13 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         });
         makerStore.log(`网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
       }
-      makerStore.update({ grid: { ...grid, positions } });
+      makerStore.update({
+        grid: { ...grid, positions },
+        trades: [
+          ...fills.map(f => ({ at: new Date().toISOString(), kind: "BUY", units: f.units, price: f.price, pnlUsd: null, token: config.maker.token })),
+          ...(makerStore.read().trades || [])
+        ].slice(0, 500)
+      });
     } else {
       const { sells } = attributeSells(positions, -delta);
       let remaining = -delta;
@@ -1212,7 +1218,15 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
           return { ...p, units: p.units - take, costUsd: p.costUsd - take * unitCost };
         })
         .filter(p => p.units > 1e-9);
-      makerStore.update({ realizedPnlUsd, lossStreak, grid: { ...grid, positions } });
+      makerStore.update({
+        realizedPnlUsd,
+        lossStreak,
+        grid: { ...grid, positions },
+        trades: [
+          ...sells.map(s => ({ at: new Date().toISOString(), kind: "SELL", units: s.units, price: s.price, pnlUsd: s.units * s.price - s.costUsd, token: config.maker.token })),
+          ...(makerStore.read().trades || [])
+        ].slice(0, 500)
+      });
     }
     grid = makerStore.read().grid;
     positions = grid.positions;
@@ -1761,7 +1775,9 @@ async function makerCycle(trigger = "timer") {
     }
   } catch (error) {
     makerStore.log(`Maker cycle failed: ${error.message}`, "error");
-    if (/BLOCK|disconnected|confirmation/i.test(error.message)) makerStore.update({ running: false });
+    // BLOCK / confirmation are hard stops; "disconnected" is usually a
+    // transient wallet-session refresh and should just retry next cycle.
+    if (/BLOCK|confirmation/i.test(error.message)) makerStore.update({ running: false });
   } finally {
     makerCycleBusy = false;
   }
