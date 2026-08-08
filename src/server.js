@@ -1723,6 +1723,109 @@ const server = http.createServer(async (request, response) => {
       return json(response, 202, { accepted: true });
     }
 
+    if (request.method === "GET" && url.pathname === "/api/finance/summary") {
+      const [wallet, onchain] = await Promise.all([
+        readAgenticWalletStatus(),
+        readOnchainSnapshot(false, "xlayer")
+      ]);
+      const maker = makerStore.read();
+      const rwa = store.read();
+      const aeon = aeonStore.read();
+
+      const makerTrades = maker.trades || [];
+      const makerSells = makerTrades.filter(t => t.kind === "SELL" && t.pnlUsd != null);
+      const makerVolume = makerTrades.reduce((sum, t) => sum + Number(t.units || 0) * Number(t.price || 0), 0);
+      const makerWins = makerSells.filter(t => t.pnlUsd > 0).length;
+      const makerStarted = makerTrades.length ? makerTrades[makerTrades.length - 1].at : null;
+      const makerPrice = Number(maker.lastDecision?.price || onchain?.prices?.[config.maker.token] || 0);
+
+      const rwaTrades = rwa.trades || [];
+      const rwaSells = rwaTrades.filter(t => t.action === "SELL" && t.cashPnlUsd != null);
+      const rwaWins = rwaSells.filter(t => t.cashPnlUsd > 0).length;
+
+      const aeonTrades = aeon.trades || [];
+
+      const projects = [
+        {
+          id: "maker",
+          name: `Maker 做市（${config.maker.token}）`,
+          chain: "X Layer",
+          status: maker.running ? "运行中" : "已停止",
+          startedAt: makerStarted,
+          realizedPnlUsd: Number((makerSells.reduce((s, t) => s + Number(t.pnlUsd || 0), 0) || 0).toFixed(2)),
+          moduleCounterUsd: Number(maker.realizedPnlUsd || 0),
+          volumeUsd: Math.round(makerVolume),
+          tradeCount: makerTrades.length,
+          winRate: makerSells.length ? Math.round(makerWins / makerSells.length * 1000) / 10 : null,
+          inventoryUsd: Math.round(Number(maker.inventoryUnits || 0) * makerPrice * 100) / 100,
+          strategy: "双边限价轮转 + 区间闸门 + K线熔断自动恢复",
+          note: maker.regimeInfo
+            ? `区间闸门: 趋势 ${Number(maker.regimeInfo.trendBps || 0).toFixed(1)}bps / 波动 ${Number(maker.regimeInfo.rangeBps || 0).toFixed(1)}bps`
+            : "区间闸门样本采集中"
+        },
+        {
+          id: "rwa",
+          name: "X Layer RWA 交易赛（旧策略）",
+          chain: "X Layer",
+          status: "已停止（官方同步中）",
+          startedAt: null,
+          realizedPnlUsd: Number(rwa.realizedPnlUsd || 0),
+          volumeUsd: Math.round(Number(rwa.boostVolumeUsd || 0)),
+          officialVolumeUsd: Math.round(Number(rwa.officialBoostVolumeUsd || 0)),
+          tradeCount: rwaTrades.length,
+          winRate: rwaSells.length ? Math.round(rwaWins / rwaSells.length * 1000) / 10 : null,
+          rank: rwa.rank,
+          estimatedRewardUsd: Number(rwa.estimatedRewardUsd || 0),
+          strategy: "低位网格 / 均值回归（已停用）"
+        },
+        {
+          id: "aeon",
+          name: "AEON 交易赛",
+          chain: "BNB Chain",
+          status: "已停止",
+          startedAt: null,
+          realizedPnlUsd: Number(aeon.realizedPnlUsd || 0),
+          volumeUsd: Math.round(Number(aeon.boostVolumeUsd || 0)),
+          tradeCount: aeonTrades.length,
+          strategy: "AEON 低价买入 / 反弹卖出（BSC）"
+        },
+        {
+          id: "hackathon",
+          name: "Build X AI Season 黑客松",
+          chain: "X Layer 测试网",
+          status: "已提交",
+          realizedPnlUsd: 0,
+          costUsd: 0,
+          volumeUsd: 0,
+          strategy: "OKXBoostAgent 参赛：测试网账本 + 演示页 + X 运营",
+          note: "奖池最高 300K USDT；Liquidity Grant（AI-RWA 赛道）50K 目标；截止 8/21 23:59 UTC",
+          links: {
+            demo: "https://czs200000.github.io/okx-boost-agent/",
+            github: "https://github.com/czs200000/okx-boost-agent",
+            contract: "https://www.okx.com/web3/explorer/xlayer-test/address/0x53A35F8f5B1fcb5Dd7154216BC0ad892FbaB8B6e"
+          }
+        }
+      ];
+
+      const walletTotalUsd = Number(onchain?.wallet?.totalValueUsd || 0);
+      const baseCapitalUsd = Number(config.risk.baseCapitalUsd || 0);
+      return json(response, 200, {
+        summary: {
+          walletTotalUsd: Math.round(walletTotalUsd * 100) / 100,
+          baseCapitalUsd: Math.round(baseCapitalUsd * 100) / 100,
+          netPnlUsd: Math.round((walletTotalUsd - baseCapitalUsd) * 100) / 100,
+          realizedProjectsUsd: Math.round(projects.reduce((s, p) => s + Number(p.realizedPnlUsd || 0), 0) * 100) / 100,
+          activeProjects: projects.filter(p => p.status === "运行中").length,
+          generatedAt: new Date().toISOString()
+        },
+        projects,
+        wallet: {
+          assets: (onchain?.wallet?.assets || []).map(a => ({ symbol: a.symbol, balance: a.balance, usdValue: Number(a.usdValue || 0) })),
+          updatedAt: onchain?.fetchedAt || null
+        }
+      });
+    }
+
     const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
     const safePath = pathname.replace(/\.\./g, "");
     const body = await readFile(join(root, safePath));

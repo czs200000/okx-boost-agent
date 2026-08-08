@@ -309,6 +309,83 @@ async function refreshMakerLive() {
   } catch (error) { console.error(error); }
 }
 
+async function refreshFinance() {
+  try { renderFinance(await api("/api/finance/summary")); }
+  catch (error) { console.error(error); }
+}
+
+function renderFinance(payload) {
+  const { summary, projects, wallet } = payload;
+  const net = Number(summary.netPnlUsd || 0);
+  el("financeWalletTotal").textContent = money(summary.walletTotalUsd);
+  el("financeWalletTotal2").textContent = money(summary.walletTotalUsd);
+  el("financeNetPnl").textContent = `总盈亏 ${money(net)}`;
+  el("financeNetPnl").className = pnlClass(net);
+  el("financeNetPnl2").textContent = money(net);
+  el("financeNetPnl2").className = pnlClass(net);
+  el("financeBaseCapital").textContent = `资金基准 ${money(summary.baseCapitalUsd)}`;
+  el("financeRealizedSum").textContent = money(summary.realizedProjectsUsd);
+  el("financeActive").textContent = String(summary.activeProjects || 0);
+  el("financeGenerated").textContent = summary.generatedAt ? `更新 ${new Date(summary.generatedAt).toLocaleTimeString()}` : "—";
+  el("financeWalletUpdated").textContent = wallet.updatedAt ? `更新 ${new Date(wallet.updatedAt).toLocaleTimeString()}` : "—";
+
+  el("financeTable").innerHTML = projects.map(p => `
+    <tr>
+      <td><b>${escapeHtml(p.name)}</b></td>
+      <td>${escapeHtml(p.chain)}</td>
+      <td><span class="status ${p.status === "运行中" ? "" : "paused"}"><i></i>${escapeHtml(p.status)}</span></td>
+      <td class="${pnlClass(p.realizedPnlUsd)}">${money(p.realizedPnlUsd)}</td>
+      <td>${money(p.volumeUsd)}</td>
+      <td>${p.tradeCount ?? 0}</td>
+      <td>${p.winRate == null ? "—" : `${p.winRate}%`}</td>
+      <td class="finance-strategy" title="${escapeHtml(p.note || "")}">${escapeHtml(p.strategy)}</td>
+    </tr>`).join("");
+
+  el("financeNotes").innerHTML = projects.map(p => {
+    const links = p.links
+      ? Object.entries(p.links).map(([k, v]) => `<a href="${v}" target="_blank" rel="noopener">${k}</a>`).join(" · ")
+      : "";
+    const extra = p.rank != null
+      ? ` · 官方排名 ${p.rank}${p.estimatedRewardUsd ? ` · 预估奖励 ${money(p.estimatedRewardUsd)}` : ""}`
+      : "";
+    const note = p.note ? ` · ${escapeHtml(p.note)}` : "";
+    const start = p.startedAt ? ` · 启动 ${new Date(p.startedAt).toLocaleString()}` : "";
+    const counter = p.moduleCounterUsd != null ? ` · 当前模块计数 ${money(p.moduleCounterUsd)}` : "";
+    return `<div class="log"><span class="info">${escapeHtml(p.name)}</span><div>${escapeHtml(p.strategy)}${start}${counter}${note}${extra}${links ? " · " + links : ""}</div></div>`;
+  }).join("");
+
+  const assets = (wallet.assets || []).filter(a => Number(a.usdValue) > 0.01).sort((a, b) => Number(b.usdValue) - Number(a.usdValue));
+  el("financeWalletAssets").innerHTML = assets.length
+    ? `<table class="asset-table"><tbody>${assets.map(a => `<tr><td><b>${escapeHtml(a.symbol)}</b></td><td class="asset-value">${money(a.usdValue)}</td></tr>`).join("")}</tbody></table>`
+    : "<table class='asset-table'><tbody><tr><td class='asset-empty'>暂无资产</td></tr></tbody></table>";
+}
+
+function downloadFile(name, content, type) {
+  const blob = new Blob([content], { type });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportFinanceCsv() {
+  api("/api/finance/summary").then(payload => {
+    const header = ["项目", "链", "状态", "累计盈亏USDT", "交易量USDT", "笔数", "胜率%", "策略", "备注"];
+    const rows = payload.projects.map(p => [
+      p.name, p.chain, p.status, p.realizedPnlUsd, p.volumeUsd, p.tradeCount ?? "", p.winRate ?? "",
+      p.strategy, p.note ?? ""
+    ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
+    downloadFile(`okx-finance-${new Date().toISOString().slice(0, 10)}.csv`, [header.join(","), ...rows].join("\n"), "text/csv");
+  }).catch(error => console.error(error));
+}
+
+function exportFinanceJson() {
+  api("/api/finance/summary").then(payload => {
+    downloadFile(`okx-finance-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(payload, null, 2), "application/json");
+  }).catch(error => console.error(error));
+}
+
 function updateControls(running) {
   const start = el("startButton");
   const stop = el("stopButton");
@@ -379,12 +456,17 @@ el("simulateButton").addEventListener("click", async () => {
 });
 el("tabXlayer").addEventListener("click", () => activateTab("xlayer"));
 el("tabMaker").addEventListener("click", () => activateTab("maker"));
+el("tabFinance").addEventListener("click", () => { activateTab("finance"); refreshFinance(); });
+el("financeExportCsv").addEventListener("click", exportFinanceCsv);
+el("financeExportJson").addEventListener("click", exportFinanceJson);
 
 function activateTab(name) {
   el("panelXlayer").classList.toggle("hidden", name !== "xlayer");
   el("panelMaker").classList.toggle("hidden", name !== "maker");
+  el("panelFinance").classList.toggle("hidden", name !== "finance");
   el("tabXlayer").classList.toggle("active", name === "xlayer");
   el("tabMaker").classList.toggle("active", name === "maker");
+  el("tabFinance").classList.toggle("active", name === "finance");
 }
 el("makerStartButton").addEventListener("click", async () => {
   await api("/api/maker/control", { method: "POST", body: JSON.stringify({ action: "start" }) });
@@ -402,8 +484,10 @@ el("makerCycleButton").addEventListener("click", async () => {
 refresh();
 refreshMaker();
 renderHackathon();
+refreshFinance();
 setInterval(refreshLive, 2000);
 setInterval(refresh, 15000);
 setInterval(refreshMakerLive, 4000);
 setInterval(refreshMaker, 15000);
 setInterval(renderHackathon, 30000);
+setInterval(refreshFinance, 30000);

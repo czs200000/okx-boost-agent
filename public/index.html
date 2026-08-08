@@ -24,6 +24,7 @@
       <nav class="tabs" aria-label="活动切换">
         <button id="tabXlayer" class="tab active" type="button">X Layer RWA</button>
         <button id="tabMaker" class="tab" type="button">Maker 做市</button>
+        <button id="tabFinance" class="tab" type="button">财务总览</button>
       </nav>
 
       <section id="panelXlayer" class="tab-panel">
@@ -178,6 +179,59 @@
           <article class="panel card">
             <div class="card-title"><div><span class="eyebrow">MAKER EVENT STREAM</span><h3>工作流日志</h3></div></div>
             <div id="makerLogs" class="logs"></div>
+          </article>
+        </section>
+      </section>
+
+      <section id="panelFinance" class="tab-panel hidden">
+        <section class="hero panel">
+          <div>
+            <span class="pill">FINANCE · 项目财报</span>
+            <h2>各项目财务报表汇总</h2>
+            <p>汇总 Maker 做市、RWA 交易赛、AEON 与黑客松的盈亏、交易量与策略，用于后续策略复盘分析。</p>
+          </div>
+          <div class="hero-metric">
+            <span>钱包总资产</span>
+            <strong id="financeWalletTotal">—</strong>
+            <small id="financeNetPnl">总盈亏 —</small>
+          </div>
+        </section>
+
+        <section class="metrics">
+          <article class="metric panel tone-green"><span>钱包总资产（实时）</span><strong id="financeWalletTotal2">—</strong><small id="financeWalletUpdated">—</small></article>
+          <article class="metric panel tone-cyan"><span>总盈亏（净值）</span><strong id="financeNetPnl2">—</strong><small id="financeBaseCapital">资金基准 —</small></article>
+          <article class="metric panel tone-blue"><span>各项目已实现合计</span><strong id="financeRealizedSum">—</strong><small>模块记账口径</small></article>
+          <article class="metric panel tone-amber"><span>运行中项目</span><strong id="financeActive">0</strong><small id="financeGenerated">—</small></article>
+        </section>
+
+        <section class="panel">
+          <div class="card-title">
+            <div><span class="eyebrow">PROJECT P&amp;L</span><h3>项目盈亏与交易统计</h3></div>
+            <div class="hero-controls">
+              <button id="financeExportJson" class="button ghost">导出 JSON</button>
+              <button id="financeExportCsv" class="button ghost">导出 CSV</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="finance-table">
+              <thead>
+                <tr>
+                  <th>项目</th><th>链</th><th>状态</th><th>累计盈亏</th><th>交易量</th><th>笔数</th><th>胜率</th><th>策略</th>
+                </tr>
+              </thead>
+              <tbody id="financeTable"><tr><td colspan="8" class="asset-empty">正在读取…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="grid two lower">
+          <article class="panel card">
+            <div class="card-title"><div><span class="eyebrow">PROJECT NOTES</span><h3>项目说明与备注</h3></div></div>
+            <div id="financeNotes" class="logs">—</div>
+          </article>
+          <article class="panel card">
+            <div class="card-title"><div><span class="eyebrow">WALLET ASSETS</span><h3>钱包资产明细</h3></div></div>
+            <div id="financeWalletAssets" class="asset-table-wrap"><table class="asset-table"><tbody><tr><td colspan="2" class="asset-empty">—</td></tr></tbody></table></div>
           </article>
         </section>
       </section>

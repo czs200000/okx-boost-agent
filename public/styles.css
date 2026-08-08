@@ -141,3 +141,12 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 .hackathon-prizes b { color: var(--amber); }
 .hackathon-checks .ok { color: var(--green); }
 @media (max-width: 900px) { .hackathon-grid { grid-template-columns: 1fr; } }
+
+/* Finance summary panel */
+.table-wrap { overflow-x: auto; margin-top: 14px; }
+.finance-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.finance-table th { text-align: left; color: var(--muted); font-size: 12px; letter-spacing: .04em; padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.finance-table td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: middle; }
+.finance-table tr:hover td { background: rgba(255,255,255,.025); }
+.finance-strategy { color: var(--muted); max-width: 260px; }
+.finance-table .status { white-space: nowrap; }
