@@ -1218,6 +1218,47 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
     positions = grid.positions;
   }
 
+  // Dust cleanup: positions too small to place a strategy sell order (below the
+  // exchange minimum) are sold at market via a direct swap; the next cycle's
+  // balance-delta detection books the realized PnL and removes the position.
+  const minOrderNotionalUsd = 1.0;
+  const dustNow = Date.now();
+  for (const pos of positions) {
+    if (pos.units * pos.sellPrice >= minOrderNotionalUsd) continue;
+    if (dustNow - Number(pos.dustSellAt || 0) < 60000) continue;
+    try {
+      const dustExecutor = new AgenticWalletExecutor({
+        enabled: true, walletAddress: wallet.evmAddress,
+        tokens: { [config.maker.token]: config.maker.tokenAddress },
+        maxSlippageBps: config.maker.exitMaxSlippageBps,
+        chain: "xlayer"
+      });
+      const plan = {
+        action: "SELL", token: config.maker.token, quoteToken: "USDT",
+        amountToken: pos.units, amountUsd: pos.units * pos.sellPrice,
+        maxSlippageBps: config.maker.exitMaxSlippageBps
+      };
+      const quote = await dustExecutor.quote(plan, snapshot);
+      const exec = await dustExecutor.execute(plan, snapshot, quote);
+      if (exec.status === "BROADCAST") {
+        makerStore.log(`清灰卖出 第${pos.level}格 残留 ${pos.units.toFixed(6)} ${config.maker.token} — ${exec.txHash}`, "warn");
+      } else if (exec.status === "CONFIRMING") {
+        makerStore.log(`清灰需钱包确认：${exec.message}`, "warn");
+      } else {
+        makerStore.log(`清灰失败（${exec.status || "unknown"}）：${exec.message || exec.error || "无明细"}`, "warn");
+      }
+      positions = positions.map(p => p.level === pos.level ? { ...p, dustSellAt: dustNow } : p);
+    } catch (error) {
+      makerStore.log(`清灰异常：${error.message}`, "warn");
+      positions = positions.map(p => p.level === pos.level ? { ...p, dustSellAt: dustNow } : p);
+    }
+  }
+  if (positions.some(p => p.dustSellAt)) {
+    makerStore.update({ grid: { ...grid, positions } });
+    grid = makerStore.read().grid;
+    positions = grid.positions;
+  }
+
   // Re-anchor the grid to the current price when flat and idle, so the levels
   // track the market instead of being stuck at a stale anchor after a big move.
   const flat = positions.length === 0 && (grid.activeOrders || []).length === 0;
