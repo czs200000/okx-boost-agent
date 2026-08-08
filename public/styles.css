@@ -164,18 +164,22 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 
 /* AI regime analysis card */
 .ai-analysis-card { margin-top: 14px; }
-.ai-grid { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 18px; margin-top: 14px; }
-.ai-verdict { display: flex; flex-direction: column; gap: 4px; }
-.ai-verdict span { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+.ai-verdict-row { display: grid; grid-template-columns: 1.6fr repeat(4, 1fr); gap: 14px; margin-top: 14px; padding: 16px; background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 12px; }
+.ai-verdict, .ai-stat { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ai-verdict span, .ai-stat span { color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
 .ai-verdict strong { font-size: 26px; }
-.ai-verdict small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.ai-stat strong { font-size: 14px; word-break: break-word; }
+.ai-stat.wide { grid-column: span 2; }
 .verdict-resume { color: var(--green); }
 .verdict-pause { color: var(--red); }
 .verdict-adjust { color: var(--amber); }
+.ai-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 18px; margin-top: 14px; }
 .ai-reasons h4, .ai-params h4, .ai-history h4 { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 8px; }
 .ai-reasons ul { list-style: none; padding: 0; margin: 0; font-size: 13px; line-height: 1.8; color: var(--text); }
 .ai-reasons li::before { content: "· "; color: var(--cyan); }
-.ai-params { font-size: 13px; color: var(--amber); }
+.ai-params-box { display: flex; flex-wrap: wrap; gap: 8px; }
+.ai-param-chip { display: inline-block; padding: 5px 10px; border: 1px solid #54452c; border-radius: 8px; background: rgba(255,200,87,.06); color: var(--amber); font-size: 12.5px; }
+.ai-params-empty { color: var(--muted); font-size: 13px; }
 .ai-history { margin-top: 16px; }
 .ai-history .logs { max-height: 240px; }
-@media (max-width: 900px) { .ai-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .ai-verdict-row { grid-template-columns: 1fr 1fr; } .ai-grid { grid-template-columns: 1fr; } .ai-stat.wide { grid-column: span 2; } }

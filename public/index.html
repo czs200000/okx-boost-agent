@@ -237,25 +237,30 @@
 
         <section class="panel ai-analysis-card">
           <div class="card-title">
-            <div><span class="eyebrow">AI REGIME ANALYSIS</span><h3>AI 分析 · 熔断决策</h3></div>
+            <div><span class="eyebrow">AI 行情分析</span><h3>AI 分析 · 熔断决策</h3></div>
             <div class="hero-controls">
               <span id="aiStatus" class="pill warn">未分析</span>
               <button id="aiRunButton" class="button ghost">立即 AI 分析</button>
             </div>
           </div>
-          <div class="ai-grid">
+          <div class="ai-verdict-row">
             <div class="ai-verdict">
               <span>最近结论</span>
               <strong id="aiVerdict">—</strong>
-              <small id="aiMeta">—</small>
             </div>
+            <div class="ai-stat"><span>置信度</span><strong id="aiConfidence">—</strong></div>
+            <div class="ai-stat"><span>分析时间</span><strong id="aiTime">—</strong></div>
+            <div class="ai-stat"><span>触发方式</span><strong id="aiTrigger">—</strong></div>
+            <div class="ai-stat wide"><span>行情区间</span><strong id="aiRegime">—</strong></div>
+          </div>
+          <div class="ai-grid">
             <div class="ai-reasons">
               <h4>分析理由</h4>
-              <ul id="aiReasons"><li>—</li></ul>
+              <ul id="aiReasons"><li>暂无分析结果</li></ul>
             </div>
             <div class="ai-params">
-              <h4>建议参数</h4>
-              <div id="aiParams">—</div>
+              <h4>参数建议</h4>
+              <div id="aiParams" class="ai-params-box">—</div>
             </div>
           </div>
           <div class="ai-history">

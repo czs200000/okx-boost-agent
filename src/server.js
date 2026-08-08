@@ -1081,11 +1081,14 @@ async function runMakerAiAnalysis(trigger = "manual") {
   const maker = makerStore.read();
   const klines = await fetchMakerKlines();
   const price = Number(maker.lastDecision?.price || 0);
-  const recentTrades = (maker.trades || []).slice(0, 20).map(t => ({
+  const recentTrades = (maker.trades || [])
+    .filter(t => !t.token || t.token === config.maker.token)
+    .slice(0, 20).map(t => ({
     kind: t.kind,
     price: Number(t.price || 0),
     pnlUsd: t.pnlUsd == null ? null : Number(t.pnlUsd),
-    at: t.at
+    at: t.at,
+    token: t.token || config.maker.token
   }));
   const context = {
     task: "Decide whether the OKX Boost market-making agent should resume trading after a circuit breaker.",
@@ -1445,7 +1448,7 @@ async function makerCycle(trigger = "timer") {
     if (fill) {
       makerStore.update({
         trades: [
-          { at: new Date().toISOString(), kind: fill.kind, units: fill.units, price: fill.price, pnlUsd: fill.pnlUsd ?? null },
+          { at: new Date().toISOString(), kind: fill.kind, units: fill.units, price: fill.price, pnlUsd: fill.pnlUsd ?? null, token: config.maker.token },
           ...(makerStore.read().trades || [])
         ].slice(0, 500)
       });

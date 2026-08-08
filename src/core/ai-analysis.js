@@ -75,7 +75,7 @@ export class AiVerdictProvider {
         messages: [
           {
             role: "system",
-            content: `You are a market-regime analyst for an automated market-making bot on OKX X Layer. The bot trades a wrapped US-stock token and just hit a circuit breaker. Decide whether it should resume trading. Return ONLY JSON with this exact shape: {"verdict":"resume"|"pause"|"adjust","confidence":0.0-1.0,"reasons":["..."],"suggestedParams":{"legUsd":number|null,"buyTriggerBps":number|null,"sellTriggerBps":number|null,"stopLossBps":number|null,"cooldownMinutes":number|null}}. verdict=resume when the market is range-bound/stable and safe to reopen; verdict=pause when it is trending down, highly volatile, or uncertain; verdict=adjust when it is tradable but parameters should change. Keep reasons short (2-4). Never include text outside the JSON.`
+            content: `你是一个针对 OKX X Layer 自动做市机器人的市场行情分析专家。该机器人交易的是美股包装代币，刚刚触发了熔断。请判断它是否应该恢复交易。只返回 JSON，格式固定为：{"verdict":"resume"|"pause"|"adjust","confidence":0.0-1.0,"reasons":["..."],"suggestedParams":{"legUsd":number|null,"buyTriggerBps":number|null,"sellTriggerBps":number|null,"stopLossBps":number|null,"cooldownMinutes":number|null}}。verdict=resume 表示市场处于区间震荡/稳定、可以安全恢复；verdict=pause 表示市场正在下跌、波动剧烈或情况不明；verdict=adjust 表示可以交易但参数需要调整。reasons 必须用中文书写，2-4 条，简明扼要。除 JSON 外不要输出任何内容。`
           },
           { role: "user", content: JSON.stringify(context) }
         ]
