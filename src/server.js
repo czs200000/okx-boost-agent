@@ -1063,6 +1063,7 @@ async function makerCloseAllPositions(wallet, snapshot, reason, inventoryUnits) 
   const state = makerStore.read();
   inventoryUnits = Number(inventoryUnits ?? state.inventoryUnits ?? 0);
   if (inventoryUnits <= 0) {
+    makerStore.update({ grid: state.grid ? { ...state.grid, positions: [] } : state.grid });
     makerStore.log(`行情下跌：无持仓可平（${reason}）`, "warn");
     return false;
   }
@@ -1081,6 +1082,11 @@ async function makerCloseAllPositions(wallet, snapshot, reason, inventoryUnits) 
   const quote = await exitExecutor.quote(plan, snapshot);
   const exec = await exitExecutor.execute(plan, snapshot, quote);
   if (exec.status === "BROADCAST") {
+    makerStore.update({
+      inventoryUnits: 0,
+      costBasisUsd: 0,
+      grid: state.grid ? { ...state.grid, positions: [] } : state.grid
+    });
     makerStore.log(`行情下跌平仓：卖出 ${inventoryUnits.toFixed(6)} ${config.maker.token} — ${exec.txHash}（${reason}）`, "warn");
     return true;
   }
@@ -1201,8 +1207,9 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         .map(p => {
           if (remaining <= 0) return p;
           const take = Math.min(remaining, p.units);
+          const unitCost = p.units > 0 ? p.costUsd / p.units : 0;
           remaining -= take;
-          return { ...p, units: p.units - take };
+          return { ...p, units: p.units - take, costUsd: p.costUsd - take * unitCost };
         })
         .filter(p => p.units > 1e-9);
       makerStore.update({ realizedPnlUsd, lossStreak, grid: { ...grid, positions } });
@@ -1274,7 +1281,7 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         toToken: order.side === "buy" ? makerTokenAddress : makerQuoteAddress,
         amount: order.side === "buy"
           ? Math.round(order.amountUsd * 1e6) / 1e6
-          : order.amountToken,
+          : Number(order.amountToken.toFixed(10)),
         triggerPrice: order.price,
         currentPrice: price
       });
