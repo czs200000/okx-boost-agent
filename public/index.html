@@ -234,6 +234,35 @@
             <div id="financeWalletAssets" class="asset-table-wrap"><table class="asset-table"><tbody><tr><td colspan="2" class="asset-empty">—</td></tr></tbody></table></div>
           </article>
         </section>
+
+        <section class="panel ai-analysis-card">
+          <div class="card-title">
+            <div><span class="eyebrow">AI REGIME ANALYSIS</span><h3>AI 分析 · 熔断决策</h3></div>
+            <div class="hero-controls">
+              <span id="aiStatus" class="pill warn">未分析</span>
+              <button id="aiRunButton" class="button ghost">立即 AI 分析</button>
+            </div>
+          </div>
+          <div class="ai-grid">
+            <div class="ai-verdict">
+              <span>最近结论</span>
+              <strong id="aiVerdict">—</strong>
+              <small id="aiMeta">—</small>
+            </div>
+            <div class="ai-reasons">
+              <h4>分析理由</h4>
+              <ul id="aiReasons"><li>—</li></ul>
+            </div>
+            <div class="ai-params">
+              <h4>建议参数</h4>
+              <div id="aiParams">—</div>
+            </div>
+          </div>
+          <div class="ai-history">
+            <h4>分析历史</h4>
+            <div id="aiHistory" class="logs">—</div>
+          </div>
+        </section>
       </section>
     </main>
     <script type="module" src="/app.js?v=10"></script>

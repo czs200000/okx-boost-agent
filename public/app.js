@@ -396,6 +396,62 @@ function exportFinanceJson() {
   }).catch(error => console.error(error));
 }
 
+const AI_VERDICT_LABEL = { resume: "可恢复交易", pause: "继续暂停", adjust: "建议调整参数" };
+const AI_VERDICT_CLASS = { resume: "verdict-resume", pause: "verdict-pause", adjust: "verdict-adjust" };
+
+async function refreshAiAnalysis() {
+  try { renderAiAnalysis(await api("/api/ai/analysis")); }
+  catch (error) { console.error(error); }
+}
+
+function renderAiAnalysis(payload) {
+  const { configured, token, last, history, regime, makerRunning } = payload;
+  el("aiStatus").textContent = configured ? `${token} · DeepSeek 已配置` : "DeepSeek 未配置";
+  el("aiStatus").className = configured ? "pill" : "pill warn";
+  if (!last) {
+    el("aiVerdict").textContent = "—";
+    el("aiVerdict").className = "";
+    el("aiMeta").textContent = "尚未分析（熔断时自动触发，或点右侧按钮手动分析）";
+    el("aiReasons").innerHTML = "<li>—</li>";
+    el("aiParams").textContent = "—";
+    el("aiHistory").innerHTML = "<div class='log'><span class='info'>暂无历史</span></div>";
+    return;
+  }
+  el("aiVerdict").textContent = AI_VERDICT_LABEL[last.verdict] || last.verdict;
+  el("aiVerdict").className = AI_VERDICT_CLASS[last.verdict] || "";
+  const conf = `${Math.round(Number(last.confidence || 0) * 100)}% 置信`;
+  el("aiMeta").textContent = `${new Date(last.at).toLocaleString()} · ${conf} · 触发: ${last.trigger}${regime ? ` · 区间: 趋势${regime.trendBps}bps/波动${regime.rangeBps}bps` : ""}`;
+  el("aiReasons").innerHTML = (last.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("") || "<li>—</li>";
+  const params = last.suggestedParams;
+  el("aiParams").textContent = params && Object.keys(params).length
+    ? Object.entries(params).map(([k, v]) => `${k}=${v}`).join(" · ")
+    : "无调整建议";
+  el("aiHistory").innerHTML = (history || []).map(h => `
+    <div class="log">
+      <span class="info">${AI_VERDICT_LABEL[h.verdict] || h.verdict} · ${Math.round(Number(h.confidence || 0) * 100)}%</span>
+      <div>${new Date(h.at).toLocaleString()} · 触发 ${h.trigger}${h.reasons?.length ? ` · ${h.reasons[0]}` : ""}</div>
+    </div>`).join("") || "<div class='log'><span class='info'>暂无历史</span></div>";
+}
+
+async function runAiAnalysis() {
+  const button = el("aiRunButton");
+  const status = el("aiStatus");
+  button.disabled = true;
+  status.textContent = "分析中…";
+  status.className = "pill warn";
+  try {
+    const result = await api("/api/ai/analysis/run", { method: "POST", body: "{}" });
+    status.textContent = "分析完成";
+    status.className = "pill";
+    await refreshAiAnalysis();
+  } catch (error) {
+    status.textContent = `失败: ${error.message}`;
+    status.className = "pill warn";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function updateControls(running) {
   const start = el("startButton");
   const stop = el("stopButton");
@@ -469,6 +525,7 @@ el("tabMaker").addEventListener("click", () => activateTab("maker"));
 el("tabFinance").addEventListener("click", () => { activateTab("finance"); refreshFinance(); });
 el("financeExportCsv").addEventListener("click", exportFinanceCsv);
 el("financeExportJson").addEventListener("click", exportFinanceJson);
+el("aiRunButton").addEventListener("click", runAiAnalysis);
 
 function activateTab(name) {
   el("panelXlayer").classList.toggle("hidden", name !== "xlayer");
@@ -495,9 +552,11 @@ refresh();
 refreshMaker();
 renderHackathon();
 refreshFinance();
+refreshAiAnalysis();
 setInterval(refreshLive, 2000);
 setInterval(refresh, 15000);
 setInterval(refreshMakerLive, 4000);
 setInterval(refreshMaker, 15000);
 setInterval(renderHackathon, 30000);
 setInterval(refreshFinance, 30000);
+setInterval(refreshAiAnalysis, 30000);
