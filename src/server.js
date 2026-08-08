@@ -22,7 +22,7 @@ import { usEquitySession } from "./core/us-equity-session.js";
 import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timing.js";
 import { reconcileTradeAccounting } from "./core/trade-accounting.js";
 import { makerDecision, shouldCancelMakerOrder } from "./core/maker.js";
-import { analyzeStabilization } from "./core/kline-analysis.js";
+import { analyzeStabilization, analyzeDowntrend } from "./core/kline-analysis.js";
 
 const execFileAsync = promisify(execFile);
 const onchainosCli = process.env.ONCHAINOS_CLI || "onchainos";
@@ -1015,20 +1015,93 @@ async function analyzeMakerKlineTrend() {
   };
 }
 
+async function analyzeMakerMarket() {
+  const { payload } = await runOnchainos([
+    "market", "kline", "--address", config.maker.tokenAddress,
+    "--chain", "xlayer", "--bar", "15m", "--limit", "48"
+  ]);
+  const candles = (payload?.data || [])
+    .filter(c => Number(c.confirm) === 1)
+    .slice(0, 48)
+    .reverse()
+    .map(c => ({ o: Number(c.o), h: Number(c.h), l: Number(c.l), c: Number(c.c), t: Number(c.ts) }));
+  const stable = analyzeStabilization(candles);
+  const downtrend = analyzeDowntrend(candles);
+  if (!stable.ok || !downtrend.ok) {
+    return { ok: false, reason: stable.ok ? downtrend.reason : stable.reason };
+  }
+  return {
+    ok: true,
+    stable: stable.stable,
+    stableScore: stable.score,
+    downtrend: downtrend.confirmed,
+    downtrendScore: downtrend.score,
+    total: 5,
+    reasons: [...downtrend.reasons, ...stable.reasons].slice(0, 6),
+    metrics: { ...downtrend.metrics, bollingerWidthBps: stable.metrics.bollingerWidthBps }
+  };
+}
+
+async function makerCancelActiveOrder() {
+  const state = makerStore.read();
+  if (!state.activeOrderId) return;
+  try { await makerCancelOrder(state.activeOrderId); } catch (error) {
+    makerStore.log(`撤单失败：${error.message}`, "warn");
+  }
+  makerStore.update({ activeOrderId: null, placedAt: null, triggerPrice: null });
+}
+
+async function makerCloseAllPositions(wallet, snapshot, reason) {
+  const state = makerStore.read();
+  const inventoryUnits = Number(state.inventoryUnits || 0);
+  if (inventoryUnits <= 0) {
+    makerStore.log(`行情下跌：无持仓可平（${reason}）`, "warn");
+    return false;
+  }
+  const price = Number(state.lastDecision?.price || snapshot?.prices?.[config.maker.token] || 0);
+  const exitExecutor = new AgenticWalletExecutor({
+    enabled: true, walletAddress: wallet.evmAddress,
+    tokens: { [config.maker.token]: config.maker.tokenAddress },
+    maxSlippageBps: config.maker.exitMaxSlippageBps,
+    chain: "xlayer"
+  });
+  const plan = {
+    action: "SELL", token: config.maker.token, quoteToken: "USDT",
+    amountToken: inventoryUnits, amountUsd: inventoryUnits * price,
+    maxSlippageBps: config.maker.exitMaxSlippageBps
+  };
+  const quote = await exitExecutor.quote(plan, snapshot);
+  const exec = await exitExecutor.execute(plan, snapshot, quote);
+  if (exec.status === "BROADCAST") {
+    makerStore.log(`行情下跌平仓：卖出 ${inventoryUnits.toFixed(6)} ${config.maker.token} — ${exec.txHash}（${reason}）`, "warn");
+    return true;
+  }
+  if (exec.status === "CONFIRMING") {
+    makerStore.update({
+      running: false, stopReason: "market_downtrend",
+      pendingConfirmation: { at: new Date().toISOString(), plan, quote, message: exec.message, next: exec.next }
+    });
+    makerStore.log(`平仓需钱包确认：${exec.message}`, "warn");
+    return true;
+  }
+  makerStore.log(`平仓失败（${exec.status || "unknown"}）：${exec.message || exec.error || "无明细"}`, "error");
+  return false;
+}
+
 async function maybeAutoResumeMaker(trigger) {
   const state = makerStore.read();
-  if (state.running || state.stopReason !== "breaker_max_loss") return;
+  if (state.running || !["breaker_max_loss", "market_downtrend"].includes(state.stopReason)) return;
   if (!config.maker.breakerAutoResume) return;
   if (Date.now() < Number(state.breakerNextCheckAt || 0)) return;
-  let trend;
+  let market;
   try {
-    trend = await analyzeMakerKlineTrend();
+    market = await analyzeMakerMarket();
   } catch (error) {
-    makerStore.log(`Breaker K-line check failed: ${error.message} — recheck later`, "warn");
+    makerStore.log(`恢复检查失败：${error.message} — 稍后重试`, "warn");
     makerStore.update({ breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs });
     return;
   }
-  if (trend.ok && trend.favorable) {
+  if (market.ok && market.stable && !market.downtrend) {
     makerStore.update({
       running: true,
       realizedPnlUsd: 0,
@@ -1037,10 +1110,10 @@ async function maybeAutoResumeMaker(trigger) {
       stopReason: null,
       breakerNextCheckAt: 0
     });
-    makerStore.log(`Breaker auto-resume: K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps — restarting (${trigger})`, "info");
+    makerStore.log(`行情符合策略（企稳 ${market.stableScore}/${market.total}、无下跌确认）— 恢复交易（${trigger}）`, "info");
   } else {
     makerStore.update({ breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs });
-    makerStore.log(`Breaker stays paused: ${trend.ok ? `K-line trend ${trend.trendBps.toFixed(1)}bps / range ${trend.rangeBps.toFixed(1)}bps` : trend.reason} — recheck in ${Math.round(config.maker.breakerCheckMs / 60000)}min`, "warn");
+    makerStore.log(`仍不满足恢复条件（${market.ok ? `企稳 ${market.stableScore}/${market.total}、下跌确认 ${market.downtrendScore}/${market.total}` : market.reason}）— ${Math.round(config.maker.breakerCheckMs / 60000)} 分钟后复查`, "warn");
   }
 }
 
@@ -1261,6 +1334,27 @@ async function makerCycle(trigger = "timer") {
       makerStore.log(`Maker stopped: realized loss $${realizedPnlUsd.toFixed(2)} breached $${config.maker.maxLossUsd} — K-line trend check scheduled`, "error");
       await maybeAutoResumeMaker("breaker");
       return;
+    }
+
+    // Market-level downtrend halt: on a confirmed short-term downtrend, stop
+    // trading and liquidate inventory immediately. Recovery is handled by
+    // maybeAutoResumeMaker once the K-line stabilizes and the trend clears.
+    if (config.maker.marketHaltEnabled && !state.stopReason && Date.now() >= Number(state.marketCheckAt || 0)) {
+      makerStore.update({ marketCheckAt: Date.now() + config.maker.klineCheckMs });
+      const market = await analyzeMakerMarket();
+      if (market.ok && market.downtrend) {
+        makerStore.log(`行情下跌确认（${market.downtrendScore}/${market.total}）— 停止交易并平仓：${market.reasons.join("；")}`, "error");
+        await makerCancelActiveOrder();
+        await makerCloseAllPositions(wallet, snapshot, "market_downtrend");
+        makerStore.update({
+          running: false,
+          stopReason: "market_downtrend",
+          breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs,
+          cooldownUntil: 0,
+          cooldownActive: false
+        });
+        return;
+      }
     }
 
     const decision = priceJumpSuspicious
@@ -1727,7 +1821,7 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request);
       if (!['start', 'pause', 'stop'].includes(body.action)) return json(response, 400, { error: "Invalid action" });
       makerStore.update(body.action === "start"
-        ? { running: true, cooldownUntil: 0, lossStreak: 0, cooldownActive: false }
+        ? { running: true, cooldownUntil: 0, lossStreak: 0, cooldownActive: false, stopReason: null }
         : { running: false });
       makerStore.log(`Maker workflow ${body.action} requested`);
       if (body.action === "start") setImmediate(() => makerCycle("manual-start"));

@@ -146,6 +146,7 @@ export const config = Object.freeze({
     breakerTrendBps: number("MAKER_BREAKER_TREND_BPS", -30),
     breakerRangeMaxBps: number("MAKER_BREAKER_RANGE_MAX_BPS", 300),
     breakerKlines: number("MAKER_BREAKER_KLINES", 24),
+    marketHaltEnabled: bool("MAKER_MARKET_HALT_ENABLED", true),
     pauseStartUtc: number("MAKER_PAUSE_START_UTC", 3),
     pauseEndUtc: number("MAKER_PAUSE_END_UTC", 7),
     maxLossUsd: number("MAKER_MAX_LOSS_USD", 15),

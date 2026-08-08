@@ -155,3 +155,60 @@ export function analyzeStabilization(klines) {
     }
   };
 }
+
+export function analyzeDowntrend(klines) {
+  // Mirror of analyzeStabilization: confirm a short-term downtrend before the
+  // maker halts trading and liquidates inventory (avoids whipsaw halts).
+  if (!Array.isArray(klines) || klines.length < 30) {
+    return { ok: false, reason: `insufficient klines (${Array.isArray(klines) ? klines.length : 0})` };
+  }
+  const closes = klines.map(k => k.c);
+  const last = closes[closes.length - 1];
+
+  const ema8 = ema(closes, 8);
+  const ema21 = ema(closes, 21);
+  const ema8SlopeBps = ema8[ema8.length - 2] > 0
+    ? ((ema8[ema8.length - 1] - ema8[ema8.length - 2]) / ema8[ema8.length - 2]) * 10000
+    : 0;
+  const rsi14 = rsi(closes, 14);
+  const macdHist = macdHistogram(closes);
+  const macdNow = macdHist[macdHist.length - 1];
+  const macdPrev = macdHist[macdHist.length - 2];
+
+  const recentLows = closes.slice(-12, -1);
+  const makingNewLow = last <= Math.min(...recentLows);
+  const emaDown = ema8SlopeBps < -30;
+  const priceBelowEma21 = last < ema21[ema21.length - 1];
+  const rsiWeak = rsi14 != null && rsi14 < 40;
+  const macdDown = macdNow != null && macdPrev != null && macdNow < macdPrev && macdNow < 0;
+
+  const conditions = [makingNewLow, emaDown, priceBelowEma21, rsiWeak, macdDown];
+  const score = conditions.filter(Boolean).length;
+  const confirmed = makingNewLow && emaDown && score >= 4;
+
+  const reasons = [];
+  if (makingNewLow) reasons.push("价格创近期新低");
+  else reasons.push("尚未创近期新低");
+  if (emaDown) reasons.push(`短期均线向下（斜率 ${ema8SlopeBps.toFixed(1)}bps）`);
+  else reasons.push(`短期均线斜率 ${ema8SlopeBps.toFixed(1)}bps`);
+  if (priceBelowEma21) reasons.push("价格跌破 EMA21");
+  else reasons.push("价格仍在 EMA21 上方");
+  if (rsiWeak) reasons.push(`RSI=${rsi14 == null ? "—" : rsi14.toFixed(1)}，偏弱`);
+  else reasons.push(`RSI=${rsi14 == null ? "—" : rsi14.toFixed(1)}`);
+  if (macdDown) reasons.push("MACD 柱状图转负且走弱");
+  else reasons.push("MACD 柱状图未进一步走弱");
+
+  return {
+    ok: true,
+    confirmed,
+    score,
+    total: 5,
+    reasons: reasons.slice(0, 4),
+    metrics: {
+      ema8SlopeBps: Math.round(ema8SlopeBps * 10) / 10,
+      rsi14: rsi14 == null ? null : Math.round(rsi14 * 10) / 10,
+      macdHistogram: macdNow == null ? null : Math.round(macdNow * 100000) / 100000,
+      lastClose: last
+    }
+  };
+}
