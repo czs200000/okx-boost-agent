@@ -23,6 +23,7 @@ import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timi
 import { reconcileTradeAccounting } from "./core/trade-accounting.js";
 import { makerDecision, shouldCancelMakerOrder } from "./core/maker.js";
 import { analyzeStabilization, analyzeDowntrend } from "./core/kline-analysis.js";
+import { buildGrid, allocateLevelUsd, attributeBuys, attributeSells, nextOrders, gridTotals } from "./core/grid.js";
 
 const execFileAsync = promisify(execFile);
 const onchainosCli = process.env.ONCHAINOS_CLI || "onchainos";
@@ -1044,16 +1045,23 @@ async function analyzeMakerMarket() {
 
 async function makerCancelActiveOrder() {
   const state = makerStore.read();
-  if (!state.activeOrderId) return;
-  try { await makerCancelOrder(state.activeOrderId); } catch (error) {
-    makerStore.log(`撤单失败：${error.message}`, "warn");
+  const ids = [];
+  if (state.activeOrderId) ids.push(state.activeOrderId);
+  for (const ao of (state.grid?.activeOrders || [])) ids.push(ao.orderId);
+  for (const id of [...new Set(ids)]) {
+    try { await makerCancelOrder(id); } catch (error) {
+      makerStore.log(`撤单失败：${error.message}`, "warn");
+    }
   }
-  makerStore.update({ activeOrderId: null, placedAt: null, triggerPrice: null });
+  makerStore.update({
+    activeOrderId: null, placedAt: null, triggerPrice: null,
+    grid: state.grid ? { ...state.grid, activeOrders: [] } : state.grid
+  });
 }
 
-async function makerCloseAllPositions(wallet, snapshot, reason) {
+async function makerCloseAllPositions(wallet, snapshot, reason, inventoryUnits) {
   const state = makerStore.read();
-  const inventoryUnits = Number(state.inventoryUnits || 0);
+  inventoryUnits = Number(inventoryUnits ?? state.inventoryUnits ?? 0);
   if (inventoryUnits <= 0) {
     makerStore.log(`行情下跌：无持仓可平（${reason}）`, "warn");
     return false;
@@ -1086,6 +1094,220 @@ async function makerCloseAllPositions(wallet, snapshot, reason) {
   }
   makerStore.log(`平仓失败（${exec.status || "unknown"}）：${exec.message || exec.error || "无明细"}`, "error");
   return false;
+}
+
+async function tuneGridSpacing() {
+  let atrBps = 0;
+  let bbBps = 0;
+  try {
+    const market = await analyzeMakerMarket();
+    if (market.ok) {
+      atrBps = Number(market.metrics.atrBps || 0);
+      bbBps = Number(market.metrics.bollingerWidthBps || 0);
+    }
+  } catch { /* keep defaults */ }
+  let spacingBps = Number(config.maker.gridSpacingBps);
+  let source = "rule";
+  if (config.maker.gridAiTuning && config.deepseek.apiKey) {
+    try {
+      const response = await fetch(`${config.deepseek.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${config.deepseek.apiKey}` },
+        body: JSON.stringify({
+          model: config.deepseek.model,
+          temperature: 0.1,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: "你是网格交易参数调优器。根据市场波动指标输出 JSON：{\"spacingBps\":30-60,\"action\":\"widen\"|\"narrow\"|\"hold\"}。高波动时加宽间距（约+20bps），低波动时缩小。只输出 JSON。"
+            },
+            { role: "user", content: JSON.stringify({ atrBps, bollingerWidthBps: bbBps, currentSpacingBps: config.maker.gridSpacingBps }) }
+          ]
+        })
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        const parsed = JSON.parse(payload.choices?.[0]?.message?.content || "{}");
+        const value = Number(parsed.spacingBps);
+        if (Number.isFinite(value)) {
+          spacingBps = Math.max(30, Math.min(60, Math.round(value)));
+          source = "ai";
+        }
+      }
+    } catch { /* fall back to rule */ }
+  }
+  if (source === "rule" && atrBps > 0) {
+    const adjustment = Math.round((atrBps - 150) / 20) * 10;
+    spacingBps = Math.max(30, Math.min(60, spacingBps + adjustment));
+  }
+  return { spacingBps, atrBps, bbBps, source };
+}
+
+async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, inventoryUnits, buysPaused }) {
+  let grid = makerStore.read().grid;
+  let state = makerStore.read();
+  // 1. Initialize the grid on first run / after recovery.
+  if (!grid?.levels?.length) {
+    const built = allocateLevelUsd(buildGrid({
+      mid: price,
+      spacingBps: config.maker.gridSpacingBps,
+      profitBps: config.maker.gridProfitBps,
+      count: config.maker.gridLevels
+    }), usdtBalanceUsd * config.maker.gridDeployPct / 100);
+    grid = { ...built, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0 };
+    makerStore.update({ grid });
+    makerStore.log(`网格初始化：${config.maker.gridLevels} 格 × ${config.maker.gridSpacingBps}bps，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
+  }
+  grid = makerStore.read().grid;
+  if (!grid?.levels?.length) {
+    makerStore.log("网格初始化失败：无有效价格", "error");
+    return;
+  }
+
+  let positions = grid.positions || [];
+  let realizedPnlUsd = Number(state.realizedPnlUsd || 0);
+  let lossStreak = Number(state.lossStreak || 0);
+
+  // 2. Fill detection via wallet balance delta.
+  const expectedUnits = gridTotals(positions).units;
+  const delta = inventoryUnits - expectedUnits;
+  if (Math.abs(delta) > 1e-9) {
+    if (delta > 0) {
+      const { fills } = attributeBuys(grid.levels, positions, delta);
+      for (const fill of fills) {
+        const level = grid.levels.find(l => l.level === fill.level);
+        if (!level) continue;
+        positions.push({
+          level: fill.level, units: fill.units, price: fill.price,
+          sellPrice: level.sellPrice, costUsd: fill.units * fill.price,
+          filledAt: new Date().toISOString()
+        });
+        makerStore.log(`网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
+      }
+      makerStore.update({ grid: { ...grid, positions } });
+    } else {
+      const { sells } = attributeSells(positions, -delta);
+      let remaining = -delta;
+      for (const sale of sells) {
+        const proceeds = sale.units * sale.price;
+        const pnl = proceeds - sale.costUsd;
+        realizedPnlUsd += pnl;
+        lossStreak = pnl < 0 ? lossStreak + 1 : 0;
+        makerStore.log(`网格卖出 第${sale.level}格 ${sale.units.toFixed(6)} @ $${sale.price.toFixed(4)}，pnl $${pnl.toFixed(4)}`, "info");
+      }
+      positions = [...positions]
+        .sort((a, b) => a.sellPrice - b.sellPrice)
+        .map(p => {
+          if (remaining <= 0) return p;
+          const take = Math.min(remaining, p.units);
+          remaining -= take;
+          return { ...p, units: p.units - take };
+        })
+        .filter(p => p.units > 1e-9);
+      makerStore.update({ realizedPnlUsd, lossStreak, grid: { ...grid, positions } });
+    }
+    grid = makerStore.read().grid;
+    positions = grid.positions;
+  }
+
+  // Re-anchor the grid to the current price when flat and idle, so the levels
+  // track the market instead of being stuck at a stale anchor after a big move.
+  const flat = positions.length === 0 && (grid.activeOrders || []).length === 0;
+  if (flat && Math.abs(price / grid.mid - 1) > 0.005) {
+    const oldMid = grid.mid;
+    const deployedUsd = grid.levels.reduce((sum, l) => sum + l.buyUsd, 0);
+    const rebuilt = allocateLevelUsd(buildGrid({
+      mid: price,
+      spacingBps: grid.spacingBps,
+      profitBps: config.maker.gridProfitBps,
+      count: config.maker.gridLevels
+    }), deployedUsd);
+    grid = { ...grid, mid: price, levels: rebuilt.levels };
+    makerStore.update({ grid });
+    makerStore.log(`网格锚点跟随：mid $${price.toFixed(2)}（原 $${oldMid.toFixed(2)}）`, "info");
+  }
+
+  // 3. Hourly AI / volatility spacing tuning; rebuild unfilled buy levels.
+  if (config.maker.gridAiTuning && Date.now() - Number(grid.lastAiTuneAt || 0) >= config.maker.gridAiIntervalMs) {
+    const tune = await tuneGridSpacing();
+    if (tune.spacingBps !== grid.spacingBps) {
+      const deployedUsd = grid.levels.reduce((sum, l) => sum + l.buyUsd, 0);
+      const rebuilt = allocateLevelUsd(buildGrid({
+        mid: grid.mid,
+        spacingBps: tune.spacingBps,
+        profitBps: config.maker.gridProfitBps,
+        count: config.maker.gridLevels
+      }), deployedUsd);
+      const sellOrders = (grid.activeOrders || []).filter(ao => ao.side === "sell");
+      for (const ao of (grid.activeOrders || []).filter(ao => ao.side === "buy")) {
+        try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
+      }
+      grid = { ...grid, spacingBps: tune.spacingBps, levels: rebuilt.levels, activeOrders: sellOrders, lastAiTuneAt: Date.now() };
+      makerStore.update({ grid });
+      makerStore.log(`网格间距调整：${tune.spacingBps}bps（ATR ${tune.atrBps}bps / 布林 ${tune.bbBps}bps，来源 ${tune.source}）`, "info");
+    } else {
+      makerStore.update({ grid: { ...grid, lastAiTuneAt: Date.now() } });
+    }
+    grid = makerStore.read().grid;
+  }
+
+  // 4. Order management: sync resting limit orders with the grid.
+  let openOrders = [];
+  try { openOrders = await makerListOrders(); } catch (error) {
+    makerStore.log(`网格订单列表失败：${error.message}`, "warn");
+  }
+  let activeOrders = (grid.activeOrders || []).filter(ao => openOrders.some(o => String(o.orderId) === String(ao.orderId)));
+  for (const ao of [...activeOrders]) {
+    if (Date.now() - Number(ao.placedAt || 0) > config.maker.gridOrderTtlMs) {
+      try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
+      activeOrders = activeOrders.filter(x => x.orderId !== ao.orderId);
+      makerStore.log(`网格订单过期撤单 第${ao.level}格（${ao.side}）`, "warn");
+    }
+  }
+  const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused });
+  for (const order of wanted) {
+    try {
+      const orderId = await makerCreateOrder({
+        direction: order.side,
+        fromToken: order.side === "buy" ? makerQuoteAddress : makerTokenAddress,
+        toToken: order.side === "buy" ? makerTokenAddress : makerQuoteAddress,
+        amount: order.side === "buy"
+          ? Math.round(order.amountUsd * 1e6) / 1e6
+          : order.amountToken,
+        triggerPrice: order.price,
+        currentPrice: price
+      });
+      activeOrders.push({ orderId, side: order.side, level: order.level, placedAt: Date.now(), price: order.price });
+      makerStore.log(`网格${order.side === "buy" ? "买入" : "卖出"}挂单 第${order.level}格 @ $${order.price.toFixed(4)}`, "info");
+    } catch (error) {
+      makerStore.log(`网格挂单失败：${error.message}`, "warn");
+    }
+  }
+  makerStore.update({ grid: { ...grid, positions, activeOrders } });
+
+  // 5. Circuit breakers.
+  if (lossStreak >= config.maker.lossStreakLimit) {
+    if (Date.now() >= Number(state.cooldownUntil || 0)) {
+      makerStore.update({
+        cooldownUntil: Date.now() + config.maker.cooldownMinutes * 60000,
+        cooldownActive: true,
+        klineCheckAt: Date.now() + config.maker.klineCheckMs
+      });
+      makerStore.log(`网格连亏 ${config.maker.lossStreakLimit} 轮 — 暂停 ${config.maker.cooldownMinutes} 分钟（K线企稳监测中）`, "warn");
+    }
+    lossStreak = 0;
+    makerStore.update({ lossStreak });
+  }
+  if (realizedPnlUsd <= -config.maker.maxLossUsd) {
+    makerStore.update({
+      running: false,
+      stopReason: "breaker_max_loss",
+      breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs
+    });
+    makerStore.log(`网格硬止损：累计亏损 $${realizedPnlUsd.toFixed(2)} 触发 -$${config.maker.maxLossUsd} — 停机等待K线企稳`, "error");
+    await maybeAutoResumeMaker("breaker");
+  }
 }
 
 async function maybeAutoResumeMaker(trigger) {
@@ -1207,7 +1429,13 @@ async function makerCycle(trigger = "timer") {
       const hi = Math.max(...regimePrices);
       const trendBps = first > 0 ? (last / first - 1) * 10000 : 0;
       const rangeBps = lo > 0 ? (hi / lo - 1) * 10000 : 0;
-      regimePaused = trendBps < -config.maker.regimeTrendBps || rangeBps > config.maker.regimeRangeMaxBps;
+      const trendThreshold = config.maker.mode === "grid"
+        ? config.maker.gridRegimeTrendBps
+        : config.maker.regimeTrendBps;
+      const rangeThreshold = config.maker.mode === "grid"
+        ? config.maker.gridRegimeRangeMaxBps
+        : config.maker.regimeRangeMaxBps;
+      regimePaused = trendBps < -trendThreshold || rangeBps > rangeThreshold;
       regimeInfo = { samples: regimePrices.length, trendBps, rangeBps };
       if (regimePaused && !state.regimePaused) {
         makerStore.log(`Regime gate: trend ${trendBps.toFixed(1)}bps / range ${rangeBps.toFixed(1)}bps — buy paused`, "warn");
@@ -1345,7 +1573,7 @@ async function makerCycle(trigger = "timer") {
       if (market.ok && market.downtrend) {
         makerStore.log(`行情下跌确认（${market.downtrendScore}/${market.total}）— 停止交易并平仓：${market.reasons.join("；")}`, "error");
         await makerCancelActiveOrder();
-        await makerCloseAllPositions(wallet, snapshot, "market_downtrend");
+        await makerCloseAllPositions(wallet, snapshot, "market_downtrend", inventoryUnits);
         makerStore.update({
           running: false,
           stopReason: "market_downtrend",
@@ -1355,6 +1583,21 @@ async function makerCycle(trigger = "timer") {
         });
         return;
       }
+    }
+
+    // Grid mode: multi-level narrow grid market making (12 levels per side)
+    // with the same protective layers (regime gate, market halt, cooldown,
+    // hard stop + K-line stabilization recovery).
+    if (config.maker.mode === "grid") {
+      await makerGridCycle({
+        wallet,
+        snapshot,
+        price,
+        usdtBalanceUsd,
+        inventoryUnits,
+        buysPaused: cooldownBlock || regimePaused || downtrendPaused || priceJumpSuspicious
+      });
+      return;
     }
 
     const decision = priceJumpSuspicious
