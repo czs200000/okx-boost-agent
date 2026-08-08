@@ -1320,6 +1320,16 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
     makerStore.log(`网格订单列表失败：${error.message}`, "warn");
   }
   let activeOrders = (grid.activeOrders || []).filter(ao => openOrders.some(o => String(o.orderId) === String(ao.orderId)));
+  // Clean up orphan orders on the exchange that are not tracked by the grid
+  // (they can accumulate after network drops / failed state writes and would
+  // double-fill if the price crosses their levels).
+  const trackedIds = new Set(activeOrders.map(ao => String(ao.orderId)));
+  for (const open of openOrders) {
+    if (!trackedIds.has(String(open.orderId))) {
+      try { await makerCancelOrder(open.orderId); } catch { /* ignore */ }
+      makerStore.log(`清理孤儿挂单 ${String(open.orderId).slice(-8)}`, "warn");
+    }
+  }
   for (const ao of [...activeOrders]) {
     if (Date.now() - Number(ao.placedAt || 0) > config.maker.gridOrderTtlMs) {
       try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
