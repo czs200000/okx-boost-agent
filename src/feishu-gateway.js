@@ -130,7 +130,7 @@ async function routeCommand(text) {
 
 async function sendText(target, text, receiveIdType = "chat_id") {
   if (!client) throw new Error("飞书网关未启动");
-  await client.im.message.create({
+  await client.im.v1.message.create({
     params: { receive_id_type: receiveIdType },
     data: { receive_id: target, msg_type: "text", content: JSON.stringify({ text }) }
   });
@@ -150,39 +150,42 @@ export async function startFeishuGateway(log) {
     return null;
   }
   client = new lark.Client({ appId: cfg.appId, appSecret: cfg.appSecret, appType: lark.AppType.SelfBuild });
-  wsClient = new lark.ws.Client({ appId: cfg.appId, appSecret: cfg.appSecret, loggerLevel: lark.LoggerLevel.INFO });
+  wsClient = new lark.WSClient({ appId: cfg.appId, appSecret: cfg.appSecret, loggerLevel: lark.LoggerLevel.info });
 
-  wsClient.on("im.message.receive_v1", async (data) => {
-    const ev = data?.event || data || {};
-    const message = ev.message || {};
-    const sender = ev.sender || {};
-    const senderOpenId = sender?.sender_id?.open_id || "";
-    const chatType = message.chat_type || "";
-    let text = "";
-    try { text = JSON.parse(message.content || "{}").text || ""; } catch { /* ignore */ }
-    const chatId = message.chat_id || "";
-    const messageId = message.message_id || "";
-    try {
-      if (cfg.adminOpenId && senderOpenId && senderOpenId !== cfg.adminOpenId) {
-        return; // silently ignore non-admin
+  wsClient.start({
+    eventDispatcher: new lark.EventDispatcher({}).register({
+      "im.message.receive_v1": async (data) => {
+        const message = data?.message || {};
+        const sender = data?.sender || {};
+        const senderOpenId = sender?.sender_id?.open_id || "";
+        const chatType = message.chat_type || "";
+        let text = "";
+        try { text = JSON.parse(message.content || "{}").text || ""; } catch { /* ignore */ }
+        const chatId = message.chat_id || "";
+        const messageId = message.message_id || "";
+        try {
+          if (cfg.adminOpenId && senderOpenId && senderOpenId !== cfg.adminOpenId) {
+            return; // silently ignore non-admin
+          }
+          if (!cfg.adminOpenId && chatType !== "p2p") {
+            return; // before admin is configured, only answer direct chats
+          }
+          if (!cfg.adminOpenId && senderOpenId) {
+            log(`飞书收到消息，sender_open_id=${senderOpenId}（可设置 FEISHU_ADMIN_OPEN_ID 锁定管理员）`, "info");
+          }
+          const reply = await routeCommand(text);
+          await client.im.v1.message.reply({ path: { message_id: messageId }, data: { content: JSON.stringify({ text: reply }), msg_type: "text" } });
+          log(`飞书已回复：${text.slice(0, 40)}`, "info");
+        } catch (error) {
+          const detail = JSON.stringify(error?.response?.data?.field_violations || error?.response?.data || "");
+          log(`飞书消息处理失败：${error.message} ${detail ? `| 明细 ${detail}` : ""}`, "error");
+          try {
+            await client.im.v1.message.reply({ path: { message_id: messageId }, data: { content: JSON.stringify({ text: `处理失败：${error.message}` }), msg_type: "text" } });
+          } catch { /* ignore */ }
+        }
       }
-      if (!cfg.adminOpenId && chatType !== "p2p") {
-        return; // before admin is configured, only answer direct chats
-      }
-      if (!cfg.adminOpenId && senderOpenId) {
-        log(`飞书收到消息，sender_open_id=${senderOpenId}（请设置 FEISHU_ADMIN_OPEN_ID 锁定管理员）`, "info");
-      }
-      const reply = await routeCommand(text);
-      await client.im.message.reply({ path: { message_id: messageId }, data: { content: JSON.stringify({ text: reply }) } });
-      log(`飞书已回复：${text.slice(0, 40)}`, "info");
-    } catch (error) {
-      log(`飞书消息处理失败：${error.message}`, "error");
-      try {
-        await client.im.message.reply({ path: { message_id: messageId }, data: { content: JSON.stringify({ text: `处理失败：${error.message}` }) } });
-      } catch { /* ignore */ }
-    }
+    })
   });
-  wsClient.start();
   log("飞书网关已启动（WebSocket 长连接）", "info");
 
   if (cfg.pushHourly) {
