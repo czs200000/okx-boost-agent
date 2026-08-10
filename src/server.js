@@ -1437,14 +1437,19 @@ async function makerGridCycle({
   }
   const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused });
   for (const order of wanted) {
-    // Never place a sell whose take-profit trigger is already at/below the
-    // current price: the backend can derive it as an already-triggered stop
-    // and market-sell below the target (OKB feed occasionally reads high).
-    if (order.side === "sell" && price >= order.price) {
-      makerStore.log(`${token} 卖出防误触发：当前 $${price.toFixed(4)} ≥ 止盈 $${order.price.toFixed(4)}，跳过挂单`, "warn");
-      continue;
-    }
     try {
+      // Sells: always derive a take-profit order (trigger > current), never a
+      // stop. The OKB/NVDAx price feed occasionally reads above the DEX price;
+      // if current >= trigger the backend can treat the sell as an
+      // already-triggered stop and market-sell below the target. Clamping the
+      // passed current-price below the trigger keeps the order resting as a
+      // take-profit so it fills only when the price actually reaches it.
+      const orderCurrentPrice = order.side === "sell"
+        ? Math.min(price, order.price * 0.995)
+        : price;
+      if (order.side === "sell" && price >= order.price) {
+        makerStore.log(`${token} 卖出止盈单（价格源 $${price.toFixed(4)} ≥ 止盈 $${order.price.toFixed(4)}，按止盈单挂出）`, "info");
+      }
       const orderId = await makerCreateOrder({
         direction: order.side,
         fromToken: order.side === "buy" ? makerQuoteAddress : tokenAddress,
@@ -1453,7 +1458,7 @@ async function makerGridCycle({
           ? Math.round(order.amountUsd * 1e6) / 1e6
           : Number(order.amountToken.toFixed(10)),
         triggerPrice: order.price,
-        currentPrice: price
+        currentPrice: orderCurrentPrice
       });
       activeOrders.push({ orderId, side: order.side, level: order.level, placedAt: Date.now(), price: order.price });
       makerStore.log(`${token} 网格${order.side === "buy" ? "买入" : "卖出"}挂单 第${order.level}格 @ $${order.price.toFixed(4)}`, "info");
