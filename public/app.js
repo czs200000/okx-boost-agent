@@ -253,9 +253,11 @@ function renderMaker(payload) {
   const sells = (state.trades || []).filter(t => t.kind === "SELL");
   el("makerRoundTrips").textContent = String(sells.length);
   el("makerTradeCount").textContent = `${(state.trades || []).length} 笔成交记录`;
-  el("makerPnl").textContent = money(state.realizedPnlUsd);
-  el("makerPnl").className = pnlClass(state.realizedPnlUsd);
-  el("makerLossStreak").textContent = `连续亏损 ${state.lossStreak || 0}`;
+  const usRealized = Number(state.realizedPnlUsd || 0);
+  const okbRealized = Number(state.realizedPnlBtcUsd || 0);
+  el("makerPnl").textContent = money(usRealized + okbRealized);
+  el("makerPnl").className = pnlClass(usRealized + okbRealized);
+  el("makerLossStreak").textContent = `美股 ${money(usRealized)} · OKB ${money(okbRealized)} · 连亏 ${Math.max(Number(state.lossStreak || 0), Number(state.lossStreakBtc || 0))}`;
   const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
   el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "正常" : "已停止";
   el("makerCooldown").textContent = inCooldown
@@ -332,9 +334,11 @@ async function refreshMakerLive() {
     el("makerOrderStatus").textContent = state.activeOrderId ? `挂单 ${String(state.activeOrderId).slice(-8)}` : "无挂单";
     el("makerRoundTrips").textContent = String(state.roundTrips || 0);
     el("makerTradeCount").textContent = `${state.tradeCount || 0} 笔成交记录`;
-    el("makerPnl").textContent = money(state.realizedPnlUsd);
-    el("makerPnl").className = pnlClass(state.realizedPnlUsd);
-    el("makerLossStreak").textContent = `连续亏损 ${state.lossStreak || 0}`;
+    const usRealized = Number(state.realizedPnlUsd || 0);
+    const okbRealized = Number(state.realizedPnlBtcUsd || 0);
+    el("makerPnl").textContent = money(usRealized + okbRealized);
+    el("makerPnl").className = pnlClass(usRealized + okbRealized);
+    el("makerLossStreak").textContent = `美股 ${money(usRealized)} · OKB ${money(okbRealized)} · 连亏 ${Math.max(Number(state.lossStreak || 0), Number(state.lossStreakBtc || 0))}`;
     const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
     el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "正常" : "已停止";
     el("makerSystemStatus").innerHTML = `<i></i>${state.running ? " 运行中" : " 已停止"}`;
