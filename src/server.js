@@ -1160,7 +1160,7 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
       spacingBps: config.maker.gridSpacingBps,
       profitBps: config.maker.gridProfitBps,
       count: config.maker.gridLevels
-    }), usdtBalanceUsd * config.maker.gridDeployPct / 100);
+    }), usdtBalanceUsd * config.maker.gridDeployPct / 100, config.maker.gridLadderMax);
     grid = { ...built, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0 };
     makerStore.update({ grid });
     makerStore.log(`网格初始化：${config.maker.gridLevels} 格 × ${config.maker.gridSpacingBps}bps，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
@@ -1289,7 +1289,7 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
       spacingBps: grid.spacingBps,
       profitBps: config.maker.gridProfitBps,
       count: config.maker.gridLevels
-    }), deployedUsd);
+    }), deployedUsd, config.maker.gridLadderMax);
     grid = {
       ...grid,
       mid: price,

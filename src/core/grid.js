@@ -12,10 +12,18 @@ export function buildGrid({ mid, spacingBps = 50, profitBps = 50, count = 12 }) 
   return { levels, mid, spacingBps, profitBps, count };
 }
 
-export function allocateLevelUsd(grid, deployedUsd) {
+export function allocateLevelUsd(grid, deployedUsd, ladderMax = 1) {
   if (!grid?.levels?.length) return grid;
-  const per = deployedUsd / grid.levels.length;
-  return { ...grid, levels: grid.levels.map(l => ({ ...l, buyUsd: per })) };
+  const n = grid.levels.length;
+  const weights = grid.levels.map((_, idx) => {
+    if (ladderMax <= 1 || n <= 1) return 1;
+    return 1 + (idx / (n - 1)) * (ladderMax - 1);
+  });
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+  return {
+    ...grid,
+    levels: grid.levels.map((l, i) => ({ ...l, buyUsd: deployedUsd * weights[i] / totalWeight }))
+  };
 }
 
 // When the wallet token balance grows, attribute the fill to the highest-price
