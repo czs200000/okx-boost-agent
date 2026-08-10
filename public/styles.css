@@ -142,6 +142,19 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 .hackathon-checks .ok { color: var(--green); }
 @media (max-width: 900px) { .hackathon-grid { grid-template-columns: 1fr; } }
 
+/* Per-token P&L panel */
+.pnl-token-card { margin-top: 14px; }
+.pnl-token-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px; }
+.pnl-token { background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.pnl-token h4 { color: var(--green); font-size: 13px; letter-spacing: .04em; margin-bottom: 10px; }
+.pnl-total { border-color: #3a4631; }
+.pnl-total h4 { color: var(--amber); }
+.pnl-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 12.5px; }
+.pnl-row:last-child { border-bottom: 0; }
+.pnl-row span { color: var(--muted); }
+.pnl-row b { font-weight: 650; }
+@media (max-width: 900px) { .pnl-token-grid { grid-template-columns: 1fr; } }
+
 /* Finance summary panel */
 .table-wrap { overflow-x: auto; margin-top: 14px; }
 .finance-table { width: 100%; border-collapse: collapse; font-size: 13px; }

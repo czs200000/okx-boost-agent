@@ -2158,10 +2158,58 @@ const server = http.createServer(async (request, response) => {
         readOnchainSnapshot(false, "xlayer")
       ]);
       const state = makerStore.read();
+      const grid = state.grid || {};
+      const gridBtc = state.gridBtc || {};
+      const allTrades = state.trades || [];
+      const buildTokenPnl = (symbol, gridState, realizedKey) => {
+        const positions = gridState?.positions || [];
+        const lastPrice = Number(gridState?.lastPrice || 0);
+        const unrealizedUsd = positions.reduce(
+          (sum, p) => sum + Number(p.units || 0) * lastPrice - Number(p.costUsd || 0),
+          0
+        );
+        const tokenTrades = allTrades.filter(t => t.token === symbol);
+        const sells = tokenTrades.filter(t => t.kind === "SELL" && t.pnlUsd != null);
+        const volumeUsd = tokenTrades.reduce((sum, t) => sum + Number(t.units || 0) * Number(t.price || 0) * 2, 0);
+        const winRate = sells.length
+          ? Math.round(sells.filter(t => t.pnlUsd > 0).length / sells.length * 1000) / 10
+          : null;
+        const realizedUsd = Number(state[realizedKey] || 0);
+        return {
+          symbol,
+          realizedPnlUsd: Math.round(realizedUsd * 100) / 100,
+          unrealizedUsd: Math.round(unrealizedUsd * 100) / 100,
+          netUsd: Math.round((realizedUsd + unrealizedUsd) * 100) / 100,
+          positions: positions.length,
+          activeOrders: (gridState?.activeOrders || []).length,
+          tradeCount: tokenTrades.length,
+          volumeUsd: Math.round(volumeUsd),
+          winRate
+        };
+      };
+      const usRealized = Number(state.realizedPnlUsd || 0);
+      const btcRealized = Number(state.realizedPnlBtcUsd || 0);
+      const pnlByToken = {
+        [config.maker.token]: buildTokenPnl(config.maker.token, grid, "realizedPnlUsd"),
+        ...(config.maker.extraGridToken
+          ? { [config.maker.extraGridToken]: buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd") }
+          : {}),
+        total: {
+          realizedPnlUsd: Math.round((usRealized + btcRealized) * 100) / 100,
+          unrealizedUsd: Math.round(
+            (buildTokenPnl(config.maker.token, grid, "realizedPnlUsd").unrealizedUsd
+              + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)) * 100
+          ) / 100,
+          netUsd: Math.round((usRealized + btcRealized
+            + buildTokenPnl(config.maker.token, grid, "realizedPnlUsd").unrealizedUsd
+            + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)) * 100) / 100
+        }
+      };
       return json(response, 200, {
         state,
         wallet,
         onchain,
+        pnlByToken,
         maker: {
           token: config.maker.token,
           tokenAddress: config.maker.tokenAddress,

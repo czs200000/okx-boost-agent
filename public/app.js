@@ -272,6 +272,40 @@ function renderMaker(payload) {
   updateMakerControls(state.running);
   el("makerLogs").innerHTML = state.logs.map(item => `<div class="log"><time>${new Date(item.at).toLocaleTimeString()}</time><span class="${item.level}">${item.level}</span><div>${item.message}</div></div>`).join("");
   renderMakerDecision(state.lastDecision);
+  renderTokenPnl(payload);
+}
+
+function renderTokenPnl(payload) {
+  const pnl = payload?.pnlByToken;
+  if (!pnl) return;
+  const keys = Object.keys(pnl).filter(k => k !== "total");
+  const us = keys[0] ? pnl[keys[0]] : null;
+  const btc = keys[1] ? pnl[keys[1]] : null;
+  const total = pnl.total;
+  const fill = (prefix, data, label) => {
+    if (!data) return;
+    if (label) el(`${prefix}Title`).textContent = label;
+    el(`${prefix}Realized`).textContent = money(data.realizedPnlUsd);
+    el(`${prefix}Realized`).className = pnlClass(data.realizedPnlUsd);
+    el(`${prefix}Unrealized`).textContent = money(data.unrealizedUsd);
+    el(`${prefix}Unrealized`).className = pnlClass(data.unrealizedUsd);
+    el(`${prefix}Net`).textContent = money(data.netUsd);
+    el(`${prefix}Net`).className = pnlClass(data.netUsd);
+    el(`${prefix}Meta`).textContent = data.positions != null ? `${data.positions} 仓 · ${data.activeOrders} 单` : "—";
+    el(`${prefix}Volume`).textContent = `${money(data.volumeUsd)} · ${data.winRate == null ? "—" : `${data.winRate}%`}`;
+  };
+  fill("pnlUs", us, `美股 · ${keys[0] || "—"}`);
+  fill("pnlBtc", btc, keys[1] || "BTC");
+  if (total) {
+    el("pnlTotalRealized").textContent = money(total.realizedPnlUsd);
+    el("pnlTotalRealized").className = pnlClass(total.realizedPnlUsd);
+    el("pnlTotalUnrealized").textContent = money(total.unrealizedUsd);
+    el("pnlTotalUnrealized").className = pnlClass(total.unrealizedUsd);
+    el("pnlTotalNet").textContent = money(total.netUsd);
+    el("pnlTotalNet").className = pnlClass(total.netUsd);
+    el("pnlTotalMeta").textContent = `${(us?.positions || 0) + (btc?.positions || 0)} 仓 · ${(us?.activeOrders || 0) + (btc?.activeOrders || 0)} 单`;
+    el("pnlTotalVolume").textContent = money((us?.volumeUsd || 0) + (btc?.volumeUsd || 0));
+  }
 }
 
 function updateMakerControls(running) {
