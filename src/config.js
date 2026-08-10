@@ -157,6 +157,7 @@ export const config = Object.freeze({
     gridGasUsd: number("MAKER_GRID_GAS_USD", 0),
     extraGridToken: process.env.MAKER_GRID_EXTRA_TOKEN || "",
     extraGridAddress: process.env.MAKER_GRID_EXTRA_ADDRESS || "",
+    extraGridLevels: number("MAKER_GRID_EXTRA_LEVELS", 12),
     extraGridDeployPct: number("MAKER_GRID_EXTRA_DEPLOY_PCT", 20),
     extraGridFeeRate: number("MAKER_GRID_EXTRA_FEE_RATE", 0.0008),
     extraGridGasUsd: number("MAKER_GRID_EXTRA_GAS_USD", 0.01),

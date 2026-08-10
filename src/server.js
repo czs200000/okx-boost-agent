@@ -1183,6 +1183,7 @@ async function makerGridCycle({
   tokenAddress = config.maker.tokenAddress,
   gridKey = "grid",
   deployPct = config.maker.gridDeployPct,
+  count = config.maker.gridLevels,
   aiTuning = true,
   feeRate = gridKey === "grid" ? config.maker.gridFeeRate : config.maker.extraGridFeeRate,
   gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : config.maker.extraGridGasUsd
@@ -1203,11 +1204,11 @@ async function makerGridCycle({
       mid: price,
       spacingBps: config.maker.gridSpacingBps,
       profitBps: config.maker.gridProfitBps,
-      count: config.maker.gridLevels
+      count
     }), usdtBalanceUsd * deployPct / 100, config.maker.gridLadderMax);
     grid = { ...built, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0, lastPrice: price };
     makerStore.update({ [gridKey]: grid });
-    makerStore.log(`${token} 网格初始化：${config.maker.gridLevels} 格 × ${config.maker.gridSpacingBps}bps，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
+    makerStore.log(`${token} 网格初始化：${count} 格 × ${config.maker.gridSpacingBps}bps，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
   }
   grid = makerStore.read()[gridKey];
   if (!grid?.levels?.length) {
@@ -1332,7 +1333,7 @@ async function makerGridCycle({
       mid: price,
       spacingBps: grid.spacingBps,
       profitBps: config.maker.gridProfitBps,
-      count: config.maker.gridLevels
+      count
     }), deployedUsd, config.maker.gridLadderMax);
     grid = {
       ...grid,
@@ -1353,7 +1354,7 @@ async function makerGridCycle({
         mid: grid.mid,
         spacingBps: tune.spacingBps,
         profitBps: config.maker.gridProfitBps,
-        count: config.maker.gridLevels
+        count
       }), deployedUsd);
       const sellOrders = (grid.activeOrders || []).filter(ao => ao.side === "sell");
       for (const ao of (grid.activeOrders || []).filter(ao => ao.side === "buy")) {
@@ -1781,6 +1782,7 @@ async function makerCycle(trigger = "timer") {
               tokenAddress: config.maker.extraGridAddress,
               gridKey: "gridBtc",
               deployPct: config.maker.extraGridDeployPct,
+              count: config.maker.extraGridLevels,
               aiTuning: false
             });
           }
