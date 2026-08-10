@@ -155,6 +155,7 @@ export const config = Object.freeze({
     gridOrderTtlMs: number("MAKER_GRID_ORDER_TTL_MS", 300000),
     gridAiTuning: bool("MAKER_GRID_AI_TUNING", true),
     gridAiIntervalMs: number("MAKER_GRID_AI_INTERVAL_MS", 3600000),
+    gridReanchorBps: number("MAKER_GRID_REANCHOR_BPS", 20),
     gridRegimeTrendBps: number("MAKER_GRID_REGIME_TREND_BPS", 100),
     gridRegimeRangeMaxBps: number("MAKER_GRID_REGIME_RANGE_MAX_BPS", 600),
     pauseStartUtc: number("MAKER_PAUSE_START_UTC", 3),

@@ -1273,11 +1273,16 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
     positions = grid.positions;
   }
 
-  // Re-anchor the grid to the current price when flat and idle, so the levels
-  // track the market instead of being stuck at a stale anchor after a big move.
-  const flat = positions.length === 0 && (grid.activeOrders || []).length === 0;
-  if (flat && Math.abs(price / grid.mid - 1) > 0.005) {
+  // Re-anchor the grid to the current price when flat (no inventory), so the
+  // buy levels track the market instead of being stuck at a stale anchor.
+  // Old resting buy orders are cancelled; the order-sync step re-places them
+  // at the new levels.
+  const flat = positions.length === 0;
+  if (flat && Math.abs(price / grid.mid - 1) > config.maker.gridReanchorBps / 10000) {
     const oldMid = grid.mid;
+    for (const ao of (grid.activeOrders || []).filter(o => o.side === "buy")) {
+      try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
+    }
     const deployedUsd = grid.levels.reduce((sum, l) => sum + l.buyUsd, 0);
     const rebuilt = allocateLevelUsd(buildGrid({
       mid: price,
@@ -1285,7 +1290,12 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
       profitBps: config.maker.gridProfitBps,
       count: config.maker.gridLevels
     }), deployedUsd);
-    grid = { ...grid, mid: price, levels: rebuilt.levels };
+    grid = {
+      ...grid,
+      mid: price,
+      levels: rebuilt.levels,
+      activeOrders: (grid.activeOrders || []).filter(o => o.side === "sell")
+    };
     makerStore.update({ grid });
     makerStore.log(`网格锚点跟随：mid $${price.toFixed(2)}（原 $${oldMid.toFixed(2)}）`, "info");
   }
