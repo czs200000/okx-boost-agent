@@ -2330,12 +2330,14 @@ const server = http.createServer(async (request, response) => {
       const rwa = store.read();
       const aeon = aeonStore.read();
 
-      const makerTrades = maker.trades || [];
+      const makerTokens = new Set([config.maker.token, config.maker.extraGridToken].filter(Boolean));
+      const makerTrades = (maker.trades || []).filter(t => makerTokens.has(t.token));
       const makerSells = makerTrades.filter(t => t.kind === "SELL" && t.pnlUsd != null);
       const makerVolume = makerTrades.reduce((sum, t) => sum + Number(t.units || 0) * Number(t.price || 0), 0);
       const makerWins = makerSells.filter(t => t.pnlUsd > 0).length;
       const makerStarted = makerTrades.length ? makerTrades[makerTrades.length - 1].at : null;
       const makerPrice = Number(maker.lastDecision?.price || onchain?.prices?.[config.maker.token] || 0);
+      const makerRealized = Number(maker.realizedPnlUsd || 0) + Number(maker.realizedPnlBtcUsd || 0);
 
       const rwaTrades = rwa.trades || [];
       const rwaSells = rwaTrades.filter(t => t.action === "SELL" && t.cashPnlUsd != null);
@@ -2350,8 +2352,8 @@ const server = http.createServer(async (request, response) => {
           chain: "X Layer",
           status: maker.running ? "运行中" : "已停止",
           startedAt: makerStarted,
-          realizedPnlUsd: Number((makerSells.reduce((s, t) => s + Number(t.pnlUsd || 0), 0) || 0).toFixed(2)),
-          moduleCounterUsd: Number((Number(maker.realizedPnlUsd || 0) + Number(maker.realizedPnlBtcUsd || 0)).toFixed(2)),
+          realizedPnlUsd: Number(makerRealized.toFixed(2)),
+          moduleCounterUsd: Number(makerRealized.toFixed(2)),
           volumeUsd: Math.round(makerVolume),
           tradeCount: makerTrades.length,
           winRate: makerSells.length ? Math.round(makerWins / makerSells.length * 1000) / 10 : null,
