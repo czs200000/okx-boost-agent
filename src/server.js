@@ -1016,9 +1016,9 @@ async function analyzeMakerKlineTrend() {
   };
 }
 
-async function analyzeMakerMarket() {
+async function analyzeMakerMarket(tokenAddress = config.maker.tokenAddress) {
   const { payload } = await runOnchainos([
-    "market", "kline", "--address", config.maker.tokenAddress,
+    "market", "kline", "--address", tokenAddress,
     "--chain", "xlayer", "--bar", "15m", "--limit", "48"
   ]);
   const candles = (payload?.data || [])
@@ -1041,6 +1041,19 @@ async function analyzeMakerMarket() {
     reasons: [...downtrend.reasons, ...stable.reasons].slice(0, 6),
     metrics: { ...downtrend.metrics, bollingerWidthBps: stable.metrics.bollingerWidthBps }
   };
+}
+
+async function fetchTokenPrice(tokenAddress) {
+  const { payload } = await runOnchainos(["market", "price", "--address", tokenAddress, "--chain", "xlayer"]);
+  if (!payload?.ok) throw new Error(payload?.error || "price fetch failed");
+  const data = payload?.data;
+  if (Array.isArray(data)) {
+    const item = data[0];
+    if (item && typeof item === "object") return Number(item.price || item.lastPrice || 0);
+    return 0;
+  }
+  if (data && typeof data === "object") return Number(data.price || data.lastPrice || 0);
+  return 0;
 }
 
 async function makerCancelActiveOrder() {
@@ -1102,11 +1115,11 @@ async function makerCloseAllPositions(wallet, snapshot, reason, inventoryUnits) 
   return false;
 }
 
-async function tuneGridSpacing() {
+async function tuneGridSpacing(tokenAddress = config.maker.tokenAddress) {
   let atrBps = 0;
   let bbBps = 0;
   try {
-    const market = await analyzeMakerMarket();
+    const market = await analyzeMakerMarket(tokenAddress);
     if (market.ok) {
       atrBps = Number(market.metrics.atrBps || 0);
       bbBps = Number(market.metrics.bollingerWidthBps || 0);
@@ -1150,9 +1163,24 @@ async function tuneGridSpacing() {
   return { spacingBps, atrBps, bbBps, source };
 }
 
-async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, inventoryUnits, buysPaused }) {
-  let grid = makerStore.read().grid;
+async function makerGridCycle({
+  wallet, snapshot, price, usdtBalanceUsd, inventoryUnits, buysPaused,
+  token = config.maker.token,
+  tokenAddress = config.maker.tokenAddress,
+  gridKey = "grid",
+  deployPct = config.maker.gridDeployPct,
+  aiTuning = true
+}) {
+  const realizedKey = gridKey === "grid" ? "realizedPnlUsd" : "realizedPnlBtcUsd";
+  const lossStreakKey = gridKey === "grid" ? "lossStreak" : "lossStreakBtc";
+  let grid = makerStore.read()[gridKey];
   let state = makerStore.read();
+  // 0. Per-token price-jump guard: skip order placement on a suspicious tick.
+  const lastGridPrice = Number(grid?.lastPrice || price);
+  const priceJumpBps = lastGridPrice > 0 ? Math.abs(price / lastGridPrice - 1) * 10000 : 0;
+  const gridJumpPaused = priceJumpBps > config.maker.priceJumpGuardBps;
+  if (gridJumpPaused) buysPaused = true;
+
   // 1. Initialize the grid on first run / after recovery.
   if (!grid?.levels?.length) {
     const built = allocateLevelUsd(buildGrid({
@@ -1160,20 +1188,20 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
       spacingBps: config.maker.gridSpacingBps,
       profitBps: config.maker.gridProfitBps,
       count: config.maker.gridLevels
-    }), usdtBalanceUsd * config.maker.gridDeployPct / 100, config.maker.gridLadderMax);
-    grid = { ...built, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0 };
-    makerStore.update({ grid });
-    makerStore.log(`网格初始化：${config.maker.gridLevels} 格 × ${config.maker.gridSpacingBps}bps，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
+    }), usdtBalanceUsd * deployPct / 100, config.maker.gridLadderMax);
+    grid = { ...built, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0, lastPrice: price };
+    makerStore.update({ [gridKey]: grid });
+    makerStore.log(`${token} 网格初始化：${config.maker.gridLevels} 格 × ${config.maker.gridSpacingBps}bps，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
   }
-  grid = makerStore.read().grid;
+  grid = makerStore.read()[gridKey];
   if (!grid?.levels?.length) {
-    makerStore.log("网格初始化失败：无有效价格", "error");
+    makerStore.log(`${token} 网格初始化失败：无有效价格`, "error");
     return;
   }
 
   let positions = grid.positions || [];
-  let realizedPnlUsd = Number(state.realizedPnlUsd || 0);
-  let lossStreak = Number(state.lossStreak || 0);
+  let realizedPnlUsd = Number(state[realizedKey] || 0);
+  let lossStreak = Number(state[lossStreakKey] || 0);
 
   // 2. Fill detection via wallet balance delta.
   const expectedUnits = gridTotals(positions).units;
@@ -1189,12 +1217,12 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
           sellPrice: level.sellPrice, costUsd: fill.units * fill.price,
           filledAt: new Date().toISOString()
         });
-        makerStore.log(`网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
+        makerStore.log(`${token} 网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
       }
       makerStore.update({
-        grid: { ...grid, positions },
+        [gridKey]: { ...grid, positions, lastPrice: price },
         trades: [
-          ...fills.map(f => ({ at: new Date().toISOString(), kind: "BUY", units: f.units, price: f.price, pnlUsd: null, token: config.maker.token })),
+          ...fills.map(f => ({ at: new Date().toISOString(), kind: "BUY", units: f.units, price: f.price, pnlUsd: null, token })),
           ...(makerStore.read().trades || [])
         ].slice(0, 500)
       });
@@ -1206,7 +1234,7 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         const pnl = proceeds - sale.costUsd;
         realizedPnlUsd += pnl;
         lossStreak = pnl < 0 ? lossStreak + 1 : 0;
-        makerStore.log(`网格卖出 第${sale.level}格 ${sale.units.toFixed(6)} @ $${sale.price.toFixed(4)}，pnl $${pnl.toFixed(4)}`, "info");
+        makerStore.log(`${token} 网格卖出 第${sale.level}格 ${sale.units.toFixed(6)} @ $${sale.price.toFixed(4)}，pnl $${pnl.toFixed(4)}`, "info");
       }
       positions = [...positions]
         .sort((a, b) => a.sellPrice - b.sellPrice)
@@ -1219,16 +1247,16 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         })
         .filter(p => p.units > 1e-9);
       makerStore.update({
-        realizedPnlUsd,
-        lossStreak,
-        grid: { ...grid, positions },
+        [realizedKey]: realizedPnlUsd,
+        [lossStreakKey]: lossStreak,
+        [gridKey]: { ...grid, positions, lastPrice: price },
         trades: [
-          ...sells.map(s => ({ at: new Date().toISOString(), kind: "SELL", units: s.units, price: s.price, pnlUsd: s.units * s.price - s.costUsd, token: config.maker.token })),
+          ...sells.map(s => ({ at: new Date().toISOString(), kind: "SELL", units: s.units, price: s.price, pnlUsd: s.units * s.price - s.costUsd, token })),
           ...(makerStore.read().trades || [])
         ].slice(0, 500)
       });
     }
-    grid = makerStore.read().grid;
+    grid = makerStore.read()[gridKey];
     positions = grid.positions;
   }
 
@@ -1243,19 +1271,19 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
     try {
       const dustExecutor = new AgenticWalletExecutor({
         enabled: true, walletAddress: wallet.evmAddress,
-        tokens: { [config.maker.token]: config.maker.tokenAddress },
+        tokens: { [token]: tokenAddress },
         maxSlippageBps: config.maker.exitMaxSlippageBps,
         chain: "xlayer"
       });
       const plan = {
-        action: "SELL", token: config.maker.token, quoteToken: "USDT",
+        action: "SELL", token, quoteToken: "USDT",
         amountToken: pos.units, amountUsd: pos.units * pos.sellPrice,
         maxSlippageBps: config.maker.exitMaxSlippageBps
       };
       const quote = await dustExecutor.quote(plan, snapshot);
       const exec = await dustExecutor.execute(plan, snapshot, quote);
       if (exec.status === "BROADCAST") {
-        makerStore.log(`清灰卖出 第${pos.level}格 残留 ${pos.units.toFixed(6)} ${config.maker.token} — ${exec.txHash}`, "warn");
+        makerStore.log(`${token} 清灰卖出 第${pos.level}格 残留 ${pos.units.toFixed(6)} — ${exec.txHash}`, "warn");
       } else if (exec.status === "CONFIRMING") {
         makerStore.log(`清灰需钱包确认：${exec.message}`, "warn");
       } else {
@@ -1268,8 +1296,8 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
     }
   }
   if (positions.some(p => p.dustSellAt)) {
-    makerStore.update({ grid: { ...grid, positions } });
-    grid = makerStore.read().grid;
+    makerStore.update({ [gridKey]: { ...grid, positions, lastPrice: price } });
+    grid = makerStore.read()[gridKey];
     positions = grid.positions;
   }
 
@@ -1296,13 +1324,13 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
       levels: rebuilt.levels,
       activeOrders: (grid.activeOrders || []).filter(o => o.side === "sell")
     };
-    makerStore.update({ grid });
-    makerStore.log(`网格锚点跟随：mid $${price.toFixed(2)}（原 $${oldMid.toFixed(2)}）`, "info");
+    makerStore.update({ [gridKey]: grid });
+    makerStore.log(`${token} 网格锚点跟随：mid $${price.toFixed(2)}（原 $${oldMid.toFixed(2)}）`, "info");
   }
 
   // 3. Hourly AI / volatility spacing tuning; rebuild unfilled buy levels.
-  if (config.maker.gridAiTuning && Date.now() - Number(grid.lastAiTuneAt || 0) >= config.maker.gridAiIntervalMs) {
-    const tune = await tuneGridSpacing();
+  if (aiTuning && config.maker.gridAiTuning && Date.now() - Number(grid.lastAiTuneAt || 0) >= config.maker.gridAiIntervalMs) {
+    const tune = await tuneGridSpacing(tokenAddress);
     if (tune.spacingBps !== grid.spacingBps) {
       const deployedUsd = grid.levels.reduce((sum, l) => sum + l.buyUsd, 0);
       const rebuilt = allocateLevelUsd(buildGrid({
@@ -1316,35 +1344,43 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
       }
       grid = { ...grid, spacingBps: tune.spacingBps, levels: rebuilt.levels, activeOrders: sellOrders, lastAiTuneAt: Date.now() };
-      makerStore.update({ grid });
-      makerStore.log(`网格间距调整：${tune.spacingBps}bps（ATR ${tune.atrBps}bps / 布林 ${tune.bbBps}bps，来源 ${tune.source}）`, "info");
+      makerStore.update({ [gridKey]: grid });
+      makerStore.log(`${token} 网格间距调整：${tune.spacingBps}bps（ATR ${tune.atrBps}bps / 布林 ${tune.bbBps}bps，来源 ${tune.source}）`, "info");
     } else {
-      makerStore.update({ grid: { ...grid, lastAiTuneAt: Date.now() } });
+      makerStore.update({ [gridKey]: { ...grid, lastAiTuneAt: Date.now() } });
     }
-    grid = makerStore.read().grid;
+    grid = makerStore.read()[gridKey];
   }
 
   // 4. Order management: sync resting limit orders with the grid.
   let openOrders = [];
   try { openOrders = await makerListOrders(); } catch (error) {
-    makerStore.log(`网格订单列表失败：${error.message}`, "warn");
+    makerStore.log(`${token} 网格订单列表失败：${error.message}`, "warn");
   }
-  let activeOrders = (grid.activeOrders || []).filter(ao => openOrders.some(o => String(o.orderId) === String(ao.orderId)));
-  // Clean up orphan orders on the exchange that are not tracked by the grid
+  // Scope order management to this grid's token only, so multiple grids
+  // (NVDAx + BTC) never cancel each other's resting orders.
+  const tokenLow = String(tokenAddress).toLowerCase();
+  const tokenOrders = openOrders.filter(o => {
+    const from = String(o?.fromToken?.tokenContractAddress || o?.fromToken?.address || "").toLowerCase();
+    const to = String(o?.toToken?.tokenContractAddress || o?.toToken?.address || "").toLowerCase();
+    return from === tokenLow || to === tokenLow;
+  });
+  let activeOrders = (grid.activeOrders || []).filter(ao => tokenOrders.some(o => String(o.orderId) === String(ao.orderId)));
+  // Clean up orphan orders for this token that are not tracked by the grid
   // (they can accumulate after network drops / failed state writes and would
   // double-fill if the price crosses their levels).
   const trackedIds = new Set(activeOrders.map(ao => String(ao.orderId)));
-  for (const open of openOrders) {
+  for (const open of tokenOrders) {
     if (!trackedIds.has(String(open.orderId))) {
       try { await makerCancelOrder(open.orderId); } catch { /* ignore */ }
-      makerStore.log(`清理孤儿挂单 ${String(open.orderId).slice(-8)}`, "warn");
+      makerStore.log(`${token} 清理孤儿挂单 ${String(open.orderId).slice(-8)}`, "warn");
     }
   }
   for (const ao of [...activeOrders]) {
     if (Date.now() - Number(ao.placedAt || 0) > config.maker.gridOrderTtlMs) {
       try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
       activeOrders = activeOrders.filter(x => x.orderId !== ao.orderId);
-      makerStore.log(`网格订单过期撤单 第${ao.level}格（${ao.side}）`, "warn");
+      makerStore.log(`${token} 网格订单过期撤单 第${ao.level}格（${ao.side}）`, "warn");
     }
   }
   const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused });
@@ -1352,8 +1388,8 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
     try {
       const orderId = await makerCreateOrder({
         direction: order.side,
-        fromToken: order.side === "buy" ? makerQuoteAddress : makerTokenAddress,
-        toToken: order.side === "buy" ? makerTokenAddress : makerQuoteAddress,
+        fromToken: order.side === "buy" ? makerQuoteAddress : tokenAddress,
+        toToken: order.side === "buy" ? tokenAddress : makerQuoteAddress,
         amount: order.side === "buy"
           ? Math.round(order.amountUsd * 1e6) / 1e6
           : Number(order.amountToken.toFixed(10)),
@@ -1361,12 +1397,12 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         currentPrice: price
       });
       activeOrders.push({ orderId, side: order.side, level: order.level, placedAt: Date.now(), price: order.price });
-      makerStore.log(`网格${order.side === "buy" ? "买入" : "卖出"}挂单 第${order.level}格 @ $${order.price.toFixed(4)}`, "info");
+      makerStore.log(`${token} 网格${order.side === "buy" ? "买入" : "卖出"}挂单 第${order.level}格 @ $${order.price.toFixed(4)}`, "info");
     } catch (error) {
-      makerStore.log(`网格挂单失败：${error.message}`, "warn");
+      makerStore.log(`${token} 网格挂单失败：${error.message}`, "warn");
     }
   }
-  makerStore.update({ grid: { ...grid, positions, activeOrders } });
+  makerStore.update({ [gridKey]: { ...grid, positions, activeOrders, lastPrice: price } });
 
   // 5. Circuit breakers.
   if (lossStreak >= config.maker.lossStreakLimit) {
@@ -1376,18 +1412,19 @@ async function makerGridCycle({ wallet, snapshot, price, usdtBalanceUsd, invento
         cooldownActive: true,
         klineCheckAt: Date.now() + config.maker.klineCheckMs
       });
-      makerStore.log(`网格连亏 ${config.maker.lossStreakLimit} 轮 — 暂停 ${config.maker.cooldownMinutes} 分钟（K线企稳监测中）`, "warn");
+      makerStore.log(`${token} 网格连亏 ${config.maker.lossStreakLimit} 轮 — 暂停 ${config.maker.cooldownMinutes} 分钟（K线企稳监测中）`, "warn");
     }
     lossStreak = 0;
-    makerStore.update({ lossStreak });
+    makerStore.update({ [lossStreakKey]: lossStreak });
   }
-  if (realizedPnlUsd <= -config.maker.maxLossUsd) {
+  const totalRealizedUsd = Number(state.realizedPnlUsd || 0) + Number(state.realizedPnlBtcUsd || 0);
+  if (totalRealizedUsd <= -config.maker.maxLossUsd) {
     makerStore.update({
       running: false,
       stopReason: "breaker_max_loss",
       breakerNextCheckAt: Date.now() + config.maker.breakerCheckMs
     });
-    makerStore.log(`网格硬止损：累计亏损 $${realizedPnlUsd.toFixed(2)} 触发 -$${config.maker.maxLossUsd} — 停机等待K线企稳`, "error");
+    makerStore.log(`网格硬止损：累计亏损 $${totalRealizedUsd.toFixed(2)}（${token}）触发 -$${config.maker.maxLossUsd} — 停机等待K线企稳`, "error");
     await maybeAutoResumeMaker("breaker");
   }
 }
@@ -1409,7 +1446,9 @@ async function maybeAutoResumeMaker(trigger) {
     makerStore.update({
       running: true,
       realizedPnlUsd: 0,
+      realizedPnlBtcUsd: 0,
       lossStreak: 0,
+      lossStreakBtc: 0,
       cooldownUntil: 0,
       stopReason: null,
       breakerNextCheckAt: 0
@@ -1679,6 +1718,32 @@ async function makerCycle(trigger = "timer") {
         inventoryUnits,
         buysPaused: cooldownBlock || regimePaused || downtrendPaused || priceJumpSuspicious
       });
+      // Optional second grid (e.g. BTC) runs alongside the primary token.
+      if (config.maker.extraGridToken && config.maker.extraGridAddress) {
+        try {
+          const extraPrice = await fetchTokenPrice(config.maker.extraGridAddress);
+          const extraAsset = (snapshot.wallet.assets || [])
+            .find(a => String(a.tokenAddress || "").toLowerCase() === config.maker.extraGridAddress.toLowerCase());
+          const extraUnits = Number(extraAsset?.balance || 0);
+          if (extraPrice > 0) {
+            await makerGridCycle({
+              wallet,
+              snapshot,
+              price: extraPrice,
+              usdtBalanceUsd,
+              inventoryUnits: extraUnits,
+              buysPaused: cooldownBlock || regimePaused || downtrendPaused,
+              token: config.maker.extraGridToken,
+              tokenAddress: config.maker.extraGridAddress,
+              gridKey: "gridBtc",
+              deployPct: config.maker.extraGridDeployPct,
+              aiTuning: false
+            });
+          }
+        } catch (error) {
+          makerStore.log(`BTC 网格异常：${error.message}`, "warn");
+        }
+      }
       return;
     }
 
