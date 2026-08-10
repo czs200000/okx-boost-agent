@@ -1057,6 +1057,19 @@ async function fetchTokenPrice(tokenAddress) {
   return 0;
 }
 
+// The wallet-balance endpoint can over-report the native OKB balance (it has
+// disagreed with the real on-chain balance). For grid inventory we query the
+// authoritative token-balances endpoint (196: = native token) instead.
+async function fetchNativeTokenBalance(address) {
+  const { payload } = await runOnchainos([
+    "portfolio", "token-balances", "--chain", "xlayer",
+    "--address", address, "--tokens", "196:"
+  ]);
+  const assets = payload?.data?.[0]?.tokenAssets || [];
+  const native = assets.find(a => !a.tokenContractAddress && String(a.symbol || "").toUpperCase() === "OKB") || assets[0];
+  return Number(native?.balance || 0);
+}
+
 async function makerCancelActiveOrder() {
   const state = makerStore.read();
   const ids = [];
@@ -1745,7 +1758,17 @@ async function makerCycle(trigger = "timer") {
               ? (snapshot.wallet.assets || []).find(a => !a.tokenAddress
                   && String(a.symbol || "").toUpperCase() === String(config.maker.extraGridToken).toUpperCase())
               : undefined);
-          const extraUnits = Number(extraAsset?.balance || 0);
+          let extraUnits = Number(extraAsset?.balance || 0);
+          // Native OKB doubles as the gas token: never treat the whole balance
+          // as sellable inventory, and use the authoritative balance source.
+          if (extraAddr === NATIVE_TOKEN_ADDRESS.toLowerCase()) {
+            try {
+              extraUnits = Math.max(0, await fetchNativeTokenBalance(wallet.evmAddress) - config.maker.extraGridGasReserve);
+            } catch (error) {
+              extraUnits = Math.max(0, extraUnits - config.maker.extraGridGasReserve);
+              makerStore.log(`OKB 余额接口失败，按钱包余额扣除 gas 储备：${error.message}`, "warn");
+            }
+          }
           if (extraPrice > 0) {
             await makerGridCycle({
               wallet,
