@@ -990,6 +990,7 @@ let makerTimer = null;
 
 const makerTokenAddress = config.maker.tokenAddress;
 const makerQuoteAddress = config.maker.quoteAddress;
+const NATIVE_TOKEN_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 async function analyzeMakerKlineTrend() {
   const { payload } = await runOnchainos([
@@ -1367,12 +1368,17 @@ async function makerGridCycle({
     const to = String(o?.toToken?.tokenContractAddress || o?.toToken?.address || "").toLowerCase();
     return from === tokenLow || to === tokenLow;
   });
-  let activeOrders = (grid.activeOrders || []).filter(ao => tokenOrders.some(o => String(o.orderId) === String(ao.orderId)));
+  // Manual orders placed by the user on this grid's token must never be
+  // cancelled or expired by the bot; they are excluded from orphan cleanup,
+  // TTL rotation and order sync (but still counted as resting exposure).
+  const manualOrderIds = new Set((config.maker.extraGridManualOrderIds || []).map(String));
+  const botTokenOrders = tokenOrders.filter(o => !manualOrderIds.has(String(o.orderId)));
+  let activeOrders = (grid.activeOrders || []).filter(ao => botTokenOrders.some(o => String(o.orderId) === String(ao.orderId)));
   // Clean up orphan orders for this token that are not tracked by the grid
   // (they can accumulate after network drops / failed state writes and would
   // double-fill if the price crosses their levels).
   const trackedIds = new Set(activeOrders.map(ao => String(ao.orderId)));
-  for (const open of tokenOrders) {
+  for (const open of botTokenOrders) {
     if (!trackedIds.has(String(open.orderId))) {
       try { await makerCancelOrder(open.orderId); } catch { /* ignore */ }
       makerStore.log(`${token} 清理孤儿挂单 ${String(open.orderId).slice(-8)}`, "warn");
@@ -1724,8 +1730,13 @@ async function makerCycle(trigger = "timer") {
       if (config.maker.extraGridToken && config.maker.extraGridAddress) {
         try {
           const extraPrice = await fetchTokenPrice(config.maker.extraGridAddress);
+          const extraAddr = String(config.maker.extraGridAddress || "").toLowerCase();
           const extraAsset = (snapshot.wallet.assets || [])
-            .find(a => String(a.tokenAddress || "").toLowerCase() === config.maker.extraGridAddress.toLowerCase());
+            .find(a => String(a.tokenAddress || "").toLowerCase() === extraAddr)
+            || (extraAddr === NATIVE_TOKEN_ADDRESS.toLowerCase()
+              ? (snapshot.wallet.assets || []).find(a => !a.tokenAddress
+                  && String(a.symbol || "").toUpperCase() === String(config.maker.extraGridToken).toUpperCase())
+              : undefined);
           const extraUnits = Number(extraAsset?.balance || 0);
           if (extraPrice > 0) {
             await makerGridCycle({

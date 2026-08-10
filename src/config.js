@@ -160,6 +160,8 @@ export const config = Object.freeze({
     extraGridDeployPct: number("MAKER_GRID_EXTRA_DEPLOY_PCT", 20),
     extraGridFeeRate: number("MAKER_GRID_EXTRA_FEE_RATE", 0.0008),
     extraGridGasUsd: number("MAKER_GRID_EXTRA_GAS_USD", 0.01),
+    extraGridManualOrderIds: (process.env.MAKER_GRID_MANUAL_ORDER_IDS || "")
+      .split(",").map(s => s.trim()).filter(Boolean),
     gridOrderTtlMs: number("MAKER_GRID_ORDER_TTL_MS", 300000),
     gridAiTuning: bool("MAKER_GRID_AI_TUNING", true),
     gridAiIntervalMs: number("MAKER_GRID_AI_INTERVAL_MS", 3600000),

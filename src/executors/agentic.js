@@ -14,6 +14,8 @@ const run = args => new Promise(resolve => {
   });
 });
 
+const NATIVE_TOKEN_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
 export class AgenticWalletExecutor {
   constructor({ enabled = false, walletAddress, tokens, maxSlippageBps = 15, chain = "xlayer", quoteTokenAddress = USDT_BY_CHAIN[chain] || USDT_BY_CHAIN.xlayer } = {}) {
     this.enabled = enabled;
@@ -28,7 +30,11 @@ export class AgenticWalletExecutor {
     const tokenAddress = this.tokens[plan.token];
     if (!tokenAddress) throw new Error("Unsupported competition token");
     if (plan.action === "BUY") return { from: this.quoteTokenAddress, to: tokenAddress, amount: Number(plan.amountUsd).toFixed(2) };
-    const asset = snapshot.wallet.assets.find(item => item.tokenAddress?.toLowerCase() === tokenAddress);
+    const isNative = String(tokenAddress).toLowerCase() === NATIVE_TOKEN_ADDRESS.toLowerCase();
+    const asset = isNative
+      ? snapshot.wallet.assets.find(item => !item.tokenAddress
+          && String(item.symbol || "").toUpperCase() === String(plan.token).toUpperCase())
+      : snapshot.wallet.assets.find(item => item.tokenAddress?.toLowerCase() === tokenAddress);
     const available = Number(asset?.balance || 0);
     // Lot exits use an explicit token amount; legacy exits still fall back to
     // closing the currently available token balance.
