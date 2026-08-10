@@ -1185,6 +1185,8 @@ async function makerGridCycle({
   gridKey = "grid",
   deployPct = config.maker.gridDeployPct,
   count = config.maker.gridLevels,
+  spacingBps = config.maker.gridSpacingBps,
+  profitBps = config.maker.gridProfitBps,
   aiTuning = true,
   feeRate = gridKey === "grid" ? config.maker.gridFeeRate : config.maker.extraGridFeeRate,
   gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : config.maker.extraGridGasUsd
@@ -1203,13 +1205,13 @@ async function makerGridCycle({
   if (!grid?.levels?.length) {
     const built = allocateLevelUsd(buildGrid({
       mid: price,
-      spacingBps: config.maker.gridSpacingBps,
-      profitBps: config.maker.gridProfitBps,
+      spacingBps,
+      profitBps,
       count
     }), usdtBalanceUsd * deployPct / 100, config.maker.gridLadderMax);
     grid = { ...built, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0, lastPrice: price };
     makerStore.update({ [gridKey]: grid });
-    makerStore.log(`${token} 网格初始化：${count} 格 × ${config.maker.gridSpacingBps}bps，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
+    makerStore.log(`${token} 网格初始化：${count} 格 × ${spacingBps}bps 间距 / +${profitBps}bps 止盈，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
   }
   grid = makerStore.read()[gridKey];
   if (!grid?.levels?.length) {
@@ -1333,7 +1335,7 @@ async function makerGridCycle({
     const rebuilt = allocateLevelUsd(buildGrid({
       mid: price,
       spacingBps: grid.spacingBps,
-      profitBps: config.maker.gridProfitBps,
+      profitBps,
       count
     }), deployedUsd, config.maker.gridLadderMax);
     grid = {
@@ -1354,7 +1356,7 @@ async function makerGridCycle({
       const rebuilt = allocateLevelUsd(buildGrid({
         mid: grid.mid,
         spacingBps: tune.spacingBps,
-        profitBps: config.maker.gridProfitBps,
+        profitBps,
         count
       }), deployedUsd);
       const sellOrders = (grid.activeOrders || []).filter(ao => ao.side === "sell");
@@ -1784,6 +1786,8 @@ async function makerCycle(trigger = "timer") {
               gridKey: "gridBtc",
               deployPct: config.maker.extraGridDeployPct,
               count: config.maker.extraGridLevels,
+              spacingBps: config.maker.extraGridSpacingBps,
+              profitBps: config.maker.extraGridProfitBps,
               aiTuning: false
             });
           }

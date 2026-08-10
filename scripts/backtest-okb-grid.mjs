@@ -24,6 +24,7 @@ function arg(name, fallback) {
 
 const params = {
   days: Number(arg("days", 3)),
+  skipDays: Number(arg("skip-days", 0)),
   bar: arg("bar", "15m"),
   levels: Number(arg("levels", 10)),
   spacingBps: Number(arg("spacing-bps", 50)),
@@ -36,7 +37,8 @@ const params = {
   reanchorBps: Number(arg("reanchor-bps", 20))
 };
 
-const barsNeeded = Math.max(1, Math.round(params.days * 24 * 60 / barMinutes(params.bar)));
+const barsPerDay = 24 * 60 / barMinutes(params.bar);
+const barsNeeded = Math.max(1, Math.round((params.days + params.skipDays) * barsPerDay));
 
 function barMinutes(bar) {
   const m = /^(\d+)(m|h|H|d|D|w|W)$/.exec(bar);
@@ -172,11 +174,16 @@ function run() {
 
 let candles;
 try {
-  candles = await fetchKlines(barsNeeded);
+  candles = await fetchKlines(Math.min(barsNeeded, 299));
 } catch (error) {
   console.error("K线获取失败:", error.message);
   process.exit(1);
 }
+if (params.skipDays > 0) {
+  const skipBars = Math.round(params.skipDays * barsPerDay);
+  candles = candles.slice(0, Math.max(0, candles.length - skipBars));
+}
+candles = candles.slice(-Math.round(params.days * barsPerDay));
 if (candles.length < 2) {
   console.error("K线数据不足");
   process.exit(1);
