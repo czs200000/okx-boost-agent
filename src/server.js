@@ -24,6 +24,7 @@ import { reconcileTradeAccounting } from "./core/trade-accounting.js";
 import { makerDecision, shouldCancelMakerOrder } from "./core/maker.js";
 import { analyzeStabilization, analyzeDowntrend } from "./core/kline-analysis.js";
 import { buildGrid, allocateLevelUsd, attributeBuys, attributeSells, nextOrders, gridTotals } from "./core/grid.js";
+import { startFeishuGateway } from "./feishu-gateway.js";
 
 const execFileAsync = promisify(execFile);
 const onchainosCli = process.env.ONCHAINOS_CLI || "onchainos";
@@ -2491,6 +2492,7 @@ server.listen(config.port, "127.0.0.1", () => {
     }
     scheduleMakerCycle();
   }
+  startFeishuGateway(makerStore.log.bind(makerStore));
 });
 
 // OKX publishes leaderboard batches roughly every 10 minutes. Polling once a

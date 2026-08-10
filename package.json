@@ -13,5 +13,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.0"
   }
 }
