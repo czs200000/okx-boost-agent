@@ -199,5 +199,23 @@ export async function startFeishuGateway(log) {
     }, 60 * 60 * 1000);
     log("飞书定时盈亏播报已启用（每小时）", "info");
   }
+  // Daily recap at 12:30 Asia/Tokyo.
+  const dailyPushed = { date: "" };
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+      const hhmm = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(now);
+      if (hhmm === "12:30" && dailyPushed.date !== dateKey) {
+        dailyPushed.date = dateKey;
+        const text = await makerStatus();
+        await pushToAdmin(`📅 每日复盘（12:30）\n${text}`);
+        log("飞书每日复盘已推送", "info");
+      }
+    } catch (error) {
+      log(`飞书每日复盘失败：${error.message}`, "error");
+    }
+  }, 60 * 1000);
+  log("飞书每日复盘已启用（每天 12:30 东京时间）", "info");
   return { pushToAdmin };
 }

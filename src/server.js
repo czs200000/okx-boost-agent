@@ -1436,7 +1436,24 @@ async function makerGridCycle({
     }
   }
   const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused });
+  // Shared USDT budget: each grid may only keep resting buy orders up to its
+  // share (by deployPct) of budgetPct of available USDT, so deep simultaneous
+  // dips cannot exceed the wallet balance.
+  const otherDeployPct = gridKey === "grid" ? config.maker.extraGridDeployPct : config.maker.gridDeployPct;
+  const deployShare = deployPct / (deployPct + Math.max(0, otherDeployPct));
+  const budgetUsd = Math.max(0, usdtBalanceUsd * (config.maker.gridBudgetPct / 100) * deployShare);
+  const activeBuyLevels = new Set((activeOrders || []).filter(o => o.side === "buy").map(o => o.level));
+  let thisBuyNotional = grid.levels
+    .filter(l => activeBuyLevels.has(l.level))
+    .reduce((s, l) => s + Number(l.buyUsd || 0), 0);
   for (const order of wanted) {
+    if (order.side === "buy") {
+      if (thisBuyNotional + Number(order.amountUsd || 0) > budgetUsd) {
+        makerStore.log(`${token} 资金预算闸门：本格预算 $${budgetUsd.toFixed(0)}（已占用 $${thisBuyNotional.toFixed(0)}），跳过第${order.level}格买单`, "warn");
+        continue;
+      }
+      thisBuyNotional += Number(order.amountUsd || 0);
+    }
     try {
       // Sells: always derive a take-profit order (trigger > current), never a
       // stop. The OKB/NVDAx price feed occasionally reads above the DEX price;

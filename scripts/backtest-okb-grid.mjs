@@ -24,6 +24,7 @@ function arg(name, fallback) {
 
 const params = {
   mode: arg("mode", "grid"),
+  tokenAddress: arg("token-address", NATIVE_OKB),
   days: Number(arg("days", 3)),
   skipDays: Number(arg("skip-days", 0)),
   from: arg("from", ""),
@@ -57,7 +58,7 @@ function barMinutes(bar) {
 
 async function fetchKlines(limit) {
   const { stdout } = await execFileAsync(
-    cli, ["market", "kline", "--address", NATIVE_OKB, "--chain", "xlayer", "--bar", params.bar, "--limit", String(limit)],
+    cli, ["market", "kline", "--address", params.tokenAddress, "--chain", "xlayer", "--bar", params.bar, "--limit", String(limit)],
     { timeout: 60000, maxBuffer: 4 * 1024 * 1024 }
   );
   const payload = JSON.parse(stdout);
@@ -167,7 +168,7 @@ function run() {
   const netValue = usdt + holdingsValue;
   const roundTrips = sells;
 
-  console.log("=== OKB 网格回测（原生 OKB / X Layer）===");
+  console.log(`=== 网格回测（${params.tokenAddress === NATIVE_OKB ? "原生 OKB" : params.tokenAddress} / X Layer）===`);
   console.log(`参数: ${params.levels} 档 × ${params.spacingBps}bps 间距 / +${params.profitBps}bps 止盈, 部署 ${params.deployPct}% ($${params.capital} 本金), 阶梯 1→${params.ladderMax}, 费率 ${params.feeRate * 100}% + $${params.gasUsd}/笔`);
   console.log(`行情: ${params.days} 天 ${params.bar} K线, ${candles.length} 根, ${new Date(candles[0].ts).toISOString().slice(0, 10)} ~ ${new Date(candles[candles.length - 1].ts).toISOString().slice(0, 10)}`);
   console.log(`价格区间: $${Math.min(...candles.map(c => c.l)).toFixed(2)} ~ $${Math.max(...candles.map(c => c.h)).toFixed(2)} (收盘 ${lastPrice.toFixed(2)})`);

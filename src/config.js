@@ -149,6 +149,7 @@ export const config = Object.freeze({
     breakerKlines: number("MAKER_BREAKER_KLINES", 24),
     marketHaltEnabled: bool("MAKER_MARKET_HALT_ENABLED", false),
     gridLevels: number("MAKER_GRID_LEVELS", 12),
+    gridBudgetPct: number("MAKER_GRID_BUDGET_PCT", 90),
     gridSpacingBps: number("MAKER_GRID_SPACING_BPS", 50),
     gridProfitBps: number("MAKER_GRID_PROFIT_BPS", 50),
     gridDeployPct: number("MAKER_GRID_DEPLOY_PCT", 55),
