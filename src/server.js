@@ -1169,7 +1169,9 @@ async function makerGridCycle({
   tokenAddress = config.maker.tokenAddress,
   gridKey = "grid",
   deployPct = config.maker.gridDeployPct,
-  aiTuning = true
+  aiTuning = true,
+  feeRate = gridKey === "grid" ? config.maker.gridFeeRate : config.maker.extraGridFeeRate,
+  gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : config.maker.extraGridGasUsd
 }) {
   const realizedKey = gridKey === "grid" ? "realizedPnlUsd" : "realizedPnlBtcUsd";
   const lossStreakKey = gridKey === "grid" ? "lossStreak" : "lossStreakBtc";
@@ -1214,7 +1216,7 @@ async function makerGridCycle({
         if (!level) continue;
         positions.push({
           level: fill.level, units: fill.units, price: fill.price,
-          sellPrice: level.sellPrice, costUsd: fill.units * fill.price,
+          sellPrice: level.sellPrice, costUsd: fill.units * fill.price * (1 + feeRate),
           filledAt: new Date().toISOString()
         });
         makerStore.log(`${token} 网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
@@ -1230,8 +1232,8 @@ async function makerGridCycle({
       const { sells } = attributeSells(positions, -delta);
       let remaining = -delta;
       for (const sale of sells) {
-        const proceeds = sale.units * sale.price;
-        const pnl = proceeds - sale.costUsd;
+        const proceeds = sale.units * sale.price * (1 - feeRate);
+        const pnl = proceeds - sale.costUsd - gasUsd;
         realizedPnlUsd += pnl;
         lossStreak = pnl < 0 ? lossStreak + 1 : 0;
         makerStore.log(`${token} 网格卖出 第${sale.level}格 ${sale.units.toFixed(6)} @ $${sale.price.toFixed(4)}，pnl $${pnl.toFixed(4)}`, "info");
@@ -1251,7 +1253,7 @@ async function makerGridCycle({
         [lossStreakKey]: lossStreak,
         [gridKey]: { ...grid, positions, lastPrice: price },
         trades: [
-          ...sells.map(s => ({ at: new Date().toISOString(), kind: "SELL", units: s.units, price: s.price, pnlUsd: s.units * s.price - s.costUsd, token })),
+          ...sells.map(s => ({ at: new Date().toISOString(), kind: "SELL", units: s.units, price: s.price, pnlUsd: s.units * s.price * (1 - feeRate) - s.costUsd - gasUsd, token })),
           ...(makerStore.read().trades || [])
         ].slice(0, 500)
       });
