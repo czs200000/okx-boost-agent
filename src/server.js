@@ -1750,7 +1750,7 @@ async function makerCycle(trigger = "timer") {
         buysPaused: cooldownBlock || regimePaused || downtrendPaused || priceJumpSuspicious
       });
       // Optional second grid (e.g. BTC) runs alongside the primary token.
-      if (config.maker.extraGridToken && config.maker.extraGridAddress) {
+      if (config.maker.extraGridToken && config.maker.extraGridAddress && config.maker.extraGridEnabled) {
         try {
           const extraPrice = await fetchTokenPrice(config.maker.extraGridAddress);
           const extraAddr = String(config.maker.extraGridAddress || "").toLowerCase();
