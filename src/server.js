@@ -1071,6 +1071,20 @@ async function fetchNativeTokenBalance(address) {
   return Number(native?.balance || 0);
 }
 
+// The grid books sells at the theoretical +profit price, but the actual fill
+// can differ (OKB price feed occasionally reads higher than the DEX price,
+// triggering early executions). For the OKB grid we book the most recent real
+// on-chain sell price from this wallet instead.
+async function fetchLastSellPrice(tokenAddress, walletAddress) {
+  const { payload } = await runOnchainos([
+    "token", "trades", "--address", tokenAddress, "--chain", "xlayer",
+    "--wallet-filter", walletAddress, "--limit", "5"
+  ]);
+  const trades = payload?.data || [];
+  const sell = trades.find(t => String(t.type || "").toLowerCase() === "sell");
+  return sell ? Number(sell.price || 0) : 0;
+}
+
 async function makerCancelActiveOrder() {
   const state = makerStore.read();
   const ids = [];
@@ -1248,8 +1262,19 @@ async function makerGridCycle({
       });
     } else {
       const { sells } = attributeSells(positions, -delta);
-      let remaining = -delta;
+      const pricedSells = [];
       for (const sale of sells) {
+        let sellPrice = sale.price;
+        if (gridKey === "gridBtc") {
+          try {
+            const real = await fetchLastSellPrice(tokenAddress, wallet.evmAddress);
+            if (real > 0) sellPrice = real;
+          } catch { /* keep grid price */ }
+        }
+        pricedSells.push({ ...sale, price: sellPrice });
+      }
+      let remaining = -delta;
+      for (const sale of pricedSells) {
         const proceeds = sale.units * sale.price * (1 - feeRate);
         const pnl = proceeds - sale.costUsd - gasUsd;
         realizedPnlUsd += pnl;
@@ -1271,7 +1296,7 @@ async function makerGridCycle({
         [lossStreakKey]: lossStreak,
         [gridKey]: { ...grid, positions, lastPrice: price },
         trades: [
-          ...sells.map(s => ({ at: new Date().toISOString(), kind: "SELL", units: s.units, price: s.price, pnlUsd: s.units * s.price * (1 - feeRate) - s.costUsd - gasUsd, token })),
+          ...pricedSells.map(s => ({ at: new Date().toISOString(), kind: "SELL", units: s.units, price: s.price, pnlUsd: s.units * s.price * (1 - feeRate) - s.costUsd - gasUsd, token })),
           ...(makerStore.read().trades || [])
         ].slice(0, 500)
       });
@@ -1412,6 +1437,13 @@ async function makerGridCycle({
   }
   const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused });
   for (const order of wanted) {
+    // Never place a sell whose take-profit trigger is already at/below the
+    // current price: the backend can derive it as an already-triggered stop
+    // and market-sell below the target (OKB feed occasionally reads high).
+    if (order.side === "sell" && price >= order.price) {
+      makerStore.log(`${token} 卖出防误触发：当前 $${price.toFixed(4)} ≥ 止盈 $${order.price.toFixed(4)}，跳过挂单`, "warn");
+      continue;
+    }
     try {
       const orderId = await makerCreateOrder({
         direction: order.side,
