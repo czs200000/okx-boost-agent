@@ -1373,13 +1373,15 @@ async function makerGridCycle({
   // TTL rotation and order sync (but still counted as resting exposure).
   const manualOrderIds = new Set((config.maker.extraGridManualOrderIds || []).map(String));
   const botTokenOrders = tokenOrders.filter(o => !manualOrderIds.has(String(o.orderId)));
+  const placedIds = new Set((makerStore.read().placedOrderIds || []).map(String));
   let activeOrders = (grid.activeOrders || []).filter(ao => botTokenOrders.some(o => String(o.orderId) === String(ao.orderId)));
   // Clean up orphan orders for this token that are not tracked by the grid
   // (they can accumulate after network drops / failed state writes and would
-  // double-fill if the price crosses their levels).
+  // double-fill if the price crosses their levels). Only bot-created orders
+  // are eligible; anything the user placed manually is left untouched.
   const trackedIds = new Set(activeOrders.map(ao => String(ao.orderId)));
   for (const open of botTokenOrders) {
-    if (!trackedIds.has(String(open.orderId))) {
+    if (!trackedIds.has(String(open.orderId)) && placedIds.has(String(open.orderId))) {
       try { await makerCancelOrder(open.orderId); } catch { /* ignore */ }
       makerStore.log(`${token} 清理孤儿挂单 ${String(open.orderId).slice(-8)}`, "warn");
     }
@@ -1483,7 +1485,13 @@ async function makerCreateOrder({ direction, amount, triggerPrice, currentPrice,
   ]);
   if (!payload?.ok) throw new Error(payload?.error || JSON.stringify(payload?.data || "create-limit failed"));
   if (payload.data?.belowMinimum) throw new Error(`order below minimum (min ${payload.data.minFromAmount})`);
-  return String(payload.data.orderId);
+  const orderId = String(payload.data.orderId);
+  // Ledger of orders created by the bot itself. Orphan cleanup only cancels
+  // orders that appear here, so manual user orders on the same token are
+  // never auto-cancelled.
+  const placed = makerStore.read().placedOrderIds || [];
+  makerStore.update({ placedOrderIds: [...placed, orderId].slice(-300) });
+  return orderId;
 }
 
 async function makerCancelOrder(orderId) {
