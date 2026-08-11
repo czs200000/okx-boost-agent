@@ -1445,7 +1445,8 @@ async function makerGridCycle({
   // share (by deployPct) of budgetPct of available USDT, so deep simultaneous
   // dips cannot exceed the wallet balance.
   const crclxDeployPct = config.maker.crclxGrid.enabled ? config.maker.crclxGrid.deployPct : 0;
-  const deployShare = deployPct / (config.maker.gridDeployPct + config.maker.extraGridDeployPct + crclxDeployPct);
+  const mainDeployPct = config.maker.mainEnabled ? config.maker.gridDeployPct : 0;
+  const deployShare = deployPct / (mainDeployPct + config.maker.extraGridDeployPct + crclxDeployPct);
   const budgetUsd = Math.max(0, usdtBalanceUsd * (config.maker.gridBudgetPct / 100) * deployShare);
   const activeBuyLevels = new Set((activeOrders || []).filter(o => o.side === "buy").map(o => o.level));
   let thisBuyNotional = grid.levels
@@ -1802,14 +1803,16 @@ async function makerCycle(trigger = "timer") {
     // with the same protective layers (regime gate, market halt, cooldown,
     // hard stop + K-line stabilization recovery).
     if (config.maker.mode === "grid") {
-      await makerGridCycle({
-        wallet,
-        snapshot,
-        price,
-        usdtBalanceUsd,
-        inventoryUnits,
-        buysPaused: cooldownBlock || regimePaused || downtrendPaused || priceJumpSuspicious
-      });
+      if (config.maker.mainEnabled) {
+        await makerGridCycle({
+          wallet,
+          snapshot,
+          price,
+          usdtBalanceUsd,
+          inventoryUnits,
+          buysPaused: cooldownBlock || regimePaused || downtrendPaused || priceJumpSuspicious
+        });
+      }
       // Optional second grid (e.g. BTC) runs alongside the primary token.
       if (config.maker.extraGridToken && config.maker.extraGridAddress && config.maker.extraGridEnabled) {
         try {
