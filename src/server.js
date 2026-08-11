@@ -1202,11 +1202,16 @@ async function makerGridCycle({
   spacingBps = config.maker.gridSpacingBps,
   profitBps = config.maker.gridProfitBps,
   aiTuning = true,
-  feeRate = gridKey === "grid" ? config.maker.gridFeeRate : config.maker.extraGridFeeRate,
-  gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : config.maker.extraGridGasUsd
+  feeRate = gridKey === "grid" ? config.maker.gridFeeRate : gridKey === "gridBtc" ? config.maker.extraGridFeeRate : config.maker.crclxGrid.feeRate,
+  gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : gridKey === "gridBtc" ? config.maker.extraGridGasUsd : config.maker.crclxGrid.gasUsd
 }) {
-  const realizedKey = gridKey === "grid" ? "realizedPnlUsd" : "realizedPnlBtcUsd";
-  const lossStreakKey = gridKey === "grid" ? "lossStreak" : "lossStreakBtc";
+  const keyMap = {
+    grid: { realized: "realizedPnlUsd", streak: "lossStreak" },
+    gridBtc: { realized: "realizedPnlBtcUsd", streak: "lossStreakBtc" },
+    gridCrclx: { realized: "realizedPnlCrclxUsd", streak: "lossStreakCrclx" }
+  };
+  const realizedKey = (keyMap[gridKey] || keyMap.grid).realized;
+  const lossStreakKey = (keyMap[gridKey] || keyMap.grid).streak;
   let grid = makerStore.read()[gridKey];
   let state = makerStore.read();
   // 0. Per-token price-jump guard: skip order placement on a suspicious tick.
@@ -1439,8 +1444,8 @@ async function makerGridCycle({
   // Shared USDT budget: each grid may only keep resting buy orders up to its
   // share (by deployPct) of budgetPct of available USDT, so deep simultaneous
   // dips cannot exceed the wallet balance.
-  const otherDeployPct = gridKey === "grid" ? config.maker.extraGridDeployPct : config.maker.gridDeployPct;
-  const deployShare = deployPct / (deployPct + Math.max(0, otherDeployPct));
+  const crclxDeployPct = config.maker.crclxGrid.enabled ? config.maker.crclxGrid.deployPct : 0;
+  const deployShare = deployPct / (config.maker.gridDeployPct + config.maker.extraGridDeployPct + crclxDeployPct);
   const budgetUsd = Math.max(0, usdtBalanceUsd * (config.maker.gridBudgetPct / 100) * deployShare);
   const activeBuyLevels = new Set((activeOrders || []).filter(o => o.side === "buy").map(o => o.level));
   let thisBuyNotional = grid.levels
@@ -1847,6 +1852,37 @@ async function makerCycle(trigger = "timer") {
           }
         } catch (error) {
           makerStore.log(`BTC 网格异常：${error.message}`, "warn");
+        }
+      }
+      // Optional third grid (CRCLx xStock) — independent module, off by default.
+      if (config.maker.crclxGrid.enabled && config.maker.crclxGrid.address) {
+        try {
+          const crclxPrice = await fetchTokenPrice(config.maker.crclxGrid.address);
+          const crclxAsset = (snapshot.wallet.assets || [])
+            .find(a => String(a.tokenAddress || "").toLowerCase() === config.maker.crclxGrid.address.toLowerCase());
+          const crclxUnits = Number(crclxAsset?.balance || 0);
+          if (crclxPrice > 0) {
+            await makerGridCycle({
+              wallet,
+              snapshot,
+              price: crclxPrice,
+              usdtBalanceUsd,
+              inventoryUnits: crclxUnits,
+              buysPaused: cooldownBlock || regimePaused || downtrendPaused,
+              token: config.maker.crclxGrid.token,
+              tokenAddress: config.maker.crclxGrid.address,
+              gridKey: "gridCrclx",
+              deployPct: config.maker.crclxGrid.deployPct,
+              count: config.maker.crclxGrid.levels,
+              spacingBps: config.maker.crclxGrid.spacingBps,
+              profitBps: config.maker.crclxGrid.profitBps,
+              feeRate: config.maker.crclxGrid.feeRate,
+              gasUsd: config.maker.crclxGrid.gasUsd,
+              aiTuning: false
+            });
+          }
+        } catch (error) {
+          makerStore.log(`CRCLx 网格异常：${error.message}`, "warn");
         }
       }
       return;
@@ -2265,6 +2301,7 @@ const server = http.createServer(async (request, response) => {
       const state = makerStore.read();
       const grid = state.grid || {};
       const gridBtc = state.gridBtc || {};
+      const gridCrclx = state.gridCrclx || {};
       const allTrades = state.trades || [];
       const buildTokenPnl = (symbol, gridState, realizedKey) => {
         const positions = gridState?.positions || [];
@@ -2294,20 +2331,27 @@ const server = http.createServer(async (request, response) => {
       };
       const usRealized = Number(state.realizedPnlUsd || 0);
       const btcRealized = Number(state.realizedPnlBtcUsd || 0);
+      const crclxRealized = Number(state.realizedPnlCrclxUsd || 0);
+      const crclxPnl = config.maker.crclxGrid.enabled
+        ? buildTokenPnl(config.maker.crclxGrid.token, gridCrclx, "realizedPnlCrclxUsd")
+        : null;
       const pnlByToken = {
         [config.maker.token]: buildTokenPnl(config.maker.token, grid, "realizedPnlUsd"),
         ...(config.maker.extraGridToken
           ? { [config.maker.extraGridToken]: buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd") }
           : {}),
+        ...(crclxPnl ? { [config.maker.crclxGrid.token]: crclxPnl } : {}),
         total: {
-          realizedPnlUsd: Math.round((usRealized + btcRealized) * 100) / 100,
+          realizedPnlUsd: Math.round((usRealized + btcRealized + crclxRealized) * 100) / 100,
           unrealizedUsd: Math.round(
             (buildTokenPnl(config.maker.token, grid, "realizedPnlUsd").unrealizedUsd
-              + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)) * 100
+              + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)
+              + (crclxPnl ? crclxPnl.unrealizedUsd : 0)) * 100
           ) / 100,
-          netUsd: Math.round((usRealized + btcRealized
+          netUsd: Math.round((usRealized + btcRealized + crclxRealized
             + buildTokenPnl(config.maker.token, grid, "realizedPnlUsd").unrealizedUsd
-            + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)) * 100) / 100
+            + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)
+            + (crclxPnl ? crclxPnl.unrealizedUsd : 0)) * 100) / 100
         }
       };
       return json(response, 200, {

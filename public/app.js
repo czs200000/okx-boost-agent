@@ -283,6 +283,7 @@ function renderTokenPnl(payload) {
   const keys = Object.keys(pnl).filter(k => k !== "total");
   const us = keys[0] ? pnl[keys[0]] : null;
   const btc = keys[1] ? pnl[keys[1]] : null;
+  const crclx = pnl["CRCLx"] || null;
   const total = pnl.total;
   const fill = (prefix, data, label) => {
     if (!data) return;
@@ -298,6 +299,7 @@ function renderTokenPnl(payload) {
   };
   fill("pnlUs", us, `美股 · ${keys[0] || "—"}`);
   fill("pnlBtc", btc, keys[1] || "BTC");
+  fill("pnlCrclx", crclx, "CRCLx · 独立模块");
   if (total) {
     el("pnlTotalRealized").textContent = money(total.realizedPnlUsd);
     el("pnlTotalRealized").className = pnlClass(total.realizedPnlUsd);
@@ -305,8 +307,8 @@ function renderTokenPnl(payload) {
     el("pnlTotalUnrealized").className = pnlClass(total.unrealizedUsd);
     el("pnlTotalNet").textContent = money(total.netUsd);
     el("pnlTotalNet").className = pnlClass(total.netUsd);
-    el("pnlTotalMeta").textContent = `${(us?.positions || 0) + (btc?.positions || 0)} 仓 · ${(us?.activeOrders || 0) + (btc?.activeOrders || 0)} 单`;
-    el("pnlTotalVolume").textContent = money((us?.volumeUsd || 0) + (btc?.volumeUsd || 0));
+    el("pnlTotalMeta").textContent = `${(us?.positions || 0) + (btc?.positions || 0) + (crclx?.positions || 0)} 仓 · ${(us?.activeOrders || 0) + (btc?.activeOrders || 0) + (crclx?.activeOrders || 0)} 单`;
+    el("pnlTotalVolume").textContent = money((us?.volumeUsd || 0) + (btc?.volumeUsd || 0) + (crclx?.volumeUsd || 0));
   }
 }
 

@@ -168,6 +168,18 @@ export const config = Object.freeze({
     extraGridGasReserve: number("MAKER_GRID_EXTRA_GAS_RESERVE", 0.05),
     extraGridManualOrderIds: (process.env.MAKER_GRID_MANUAL_ORDER_IDS || "")
       .split(",").map(s => s.trim()).filter(Boolean),
+    crclxGrid: {
+      enabled: bool("MAKER_GRID_CRCLX_ENABLED", false),
+      token: "CRCLx",
+      address: process.env.MAKER_GRID_CRCLX_ADDRESS || "0xfebded1b0986a8ee107f5ab1a1c5a813491deceb",
+      deployPct: number("MAKER_GRID_CRCLX_DEPLOY_PCT", 40),
+      levels: number("MAKER_GRID_CRCLX_LEVELS", 8),
+      spacingBps: number("MAKER_GRID_CRCLX_SPACING_BPS", 50),
+      profitBps: number("MAKER_GRID_CRCLX_PROFIT_BPS", 150),
+      feeRate: 0,
+      gasUsd: 0,
+      ladderMax: number("MAKER_GRID_CRCLX_LADDER_MAX", 2)
+    },
     gridOrderTtlMs: number("MAKER_GRID_ORDER_TTL_MS", 300000),
     gridAiTuning: bool("MAKER_GRID_AI_TUNING", true),
     gridAiIntervalMs: number("MAKER_GRID_AI_INTERVAL_MS", 3600000),
