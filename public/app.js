@@ -357,6 +357,13 @@ function renderFinance(payload) {
   const net = Number(summary.netPnlUsd || 0);
   el("financeWalletTotal").textContent = money(summary.walletTotalUsd);
   el("financeWalletTotal2").textContent = money(summary.walletTotalUsd);
+  const change1h = summary.walletChange1hUsd == null ? null : Number(summary.walletChange1hUsd);
+  const change24h = summary.walletChange24hUsd == null ? null : Number(summary.walletChange24hUsd);
+  const trendText = [
+    change1h == null ? "近1h —" : `近1h ${change1h >= 0 ? "+" : ""}${money(change1h)}`,
+    change24h == null ? "近24h —" : `近24h ${change24h >= 0 ? "+" : ""}${money(change24h)}`
+  ].join(" · ");
+  el("financeWalletUpdated").textContent = `${trendText}`;
   el("financeNetPnl").textContent = `总盈亏 ${money(net)}`;
   el("financeNetPnl").className = pnlClass(net);
   el("financeNetPnl2").textContent = money(net);

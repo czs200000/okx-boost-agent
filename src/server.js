@@ -2467,11 +2467,22 @@ const server = http.createServer(async (request, response) => {
 
       const walletTotalUsd = Number(onchain?.wallet?.totalValueUsd || 0);
       const baseCapitalUsd = Number(config.risk.baseCapitalUsd || 0);
+      // Record wallet-total history so the console can show real asset trends
+      // (the only P&L the user trusts is the wallet balance itself).
+      const walletHistory = store.read().walletHistory || [];
+      walletHistory.push({ at: new Date().toISOString(), value: walletTotalUsd });
+      const cutoff24h = Date.now() - 24 * 3600 * 1000;
+      const pruned = walletHistory.filter(h => new Date(h.at).getTime() >= cutoff24h).slice(-1000);
+      store.update({ walletHistory: pruned });
+      const first1h = pruned.find(h => new Date(h.at).getTime() >= Date.now() - 3600 * 1000);
+      const first24h = pruned.length ? pruned[0] : null;
       return json(response, 200, {
         summary: {
           walletTotalUsd: Math.round(walletTotalUsd * 100) / 100,
           baseCapitalUsd: Math.round(baseCapitalUsd * 100) / 100,
           netPnlUsd: Math.round((walletTotalUsd - baseCapitalUsd) * 100) / 100,
+          walletChange1hUsd: first1h ? Math.round((walletTotalUsd - first1h.value) * 100) / 100 : null,
+          walletChange24hUsd: first24h ? Math.round((walletTotalUsd - first24h.value) * 100) / 100 : null,
           realizedProjectsUsd: Math.round(projects.reduce((s, p) => s + Number(p.realizedPnlUsd || 0), 0) * 100) / 100,
           activeProjects: projects.filter(p => p.status === "运行中").length,
           generatedAt: new Date().toISOString()
@@ -2559,3 +2570,17 @@ server.listen(config.port, "127.0.0.1", () => {
 // minute catches the next published batch without pretending we can force it.
 setInterval(() => syncOfficialBoost("timer"), 60 * 1000);
 setInterval(() => evaluateAndAdjustTiming(), Math.max(60000, config.execution.adaptiveEvaluationMs));
+// Wallet-total snapshots every 5 minutes: the user judges P&L by the real
+// wallet balance, so keep a continuous trend (24h window).
+setInterval(async () => {
+  try {
+    const onchain = await readOnchainSnapshot(true, "xlayer");
+    const value = Number(onchain?.wallet?.totalValueUsd || 0);
+    if (value > 0) {
+      const history = store.read().walletHistory || [];
+      history.push({ at: new Date().toISOString(), value });
+      const cutoff = Date.now() - 24 * 3600 * 1000;
+      store.update({ walletHistory: history.filter(h => new Date(h.at).getTime() >= cutoff).slice(-1000) });
+    }
+  } catch { /* transient network errors are fine */ }
+}, 5 * 60 * 1000);
