@@ -185,8 +185,8 @@ export const config = Object.freeze({
       .split(",").map(s => s.trim()).filter(Boolean),
     crclxGrid: {
       enabled: bool("MAKER_GRID_CRCLX_ENABLED", false),
-      token: "CRCLx",
-      address: process.env.MAKER_GRID_CRCLX_ADDRESS || "0xfebded1b0986a8ee107f5ab1a1c5a813491deceb",
+      token: process.env.MAKER_GRID_CRCLX_TOKEN || "CRCLx",
+      address: process.env.MAKER_GRID_CRCLX_ADDRESS || "0x8ad3c73f833d3f9a523ab01476625f269aeb7cf0",
       deployPct: number("MAKER_GRID_CRCLX_DEPLOY_PCT", 40),
       levels: number("MAKER_GRID_CRCLX_LEVELS", 8),
       spacingBps: number("MAKER_GRID_CRCLX_SPACING_BPS", 50),

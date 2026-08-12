@@ -1903,7 +1903,8 @@ async function makerCycle(trigger = "timer") {
             deployOverride: { main: alloc.main, crclx: alloc.crclx },
             flowAllocInfo: { volumeMainUsd: alloc.volumeMain, volumeOtherUsd: alloc.volumeOther, at: now }
           });
-          makerStore.log(`资金流调仓：NVDAx ${alloc.main}% / CRCLx ${alloc.crclx}%（量 ${alloc.volumeMain} / ${alloc.volumeOther}）`, "info");
+          const otherTokenName = config.maker.crclxGrid.token || "第三网格";
+          makerStore.log(`资金流调仓：${config.maker.token} ${alloc.main}% / ${otherTokenName} ${alloc.crclx}%（量 ${alloc.volumeMain} / ${alloc.volumeOther}）`, "info");
         } catch (error) {
           makerStore.log(`资金流调仓失败：${error.message}`, "warn");
         }

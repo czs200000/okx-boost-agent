@@ -290,7 +290,8 @@ function renderTokenPnl(payload) {
   const keys = Object.keys(pnl).filter(k => k !== "total");
   const us = keys[0] ? pnl[keys[0]] : null;
   const btc = keys[1] ? pnl[keys[1]] : null;
-  const crclx = pnl["CRCLx"] || null;
+  const thirdKey = keys.find(k => k !== "NVDAx" && k !== "OKB" && k !== "total");
+  const crclx = thirdKey ? pnl[thirdKey] : null;
   const total = pnl.total;
   const fill = (prefix, data, label) => {
     if (!data) return;
@@ -306,7 +307,7 @@ function renderTokenPnl(payload) {
   };
   fill("pnlUs", us, `美股 · ${keys[0] || "—"}`);
   fill("pnlBtc", btc, keys[1] || "BTC");
-  fill("pnlCrclx", crclx, "CRCLx · 独立模块");
+  fill("pnlCrclx", crclx, `${thirdKey || "独立"} · 独立模块`);
   if (total) {
     el("pnlTotalRealized").textContent = money(total.realizedPnlUsd);
     el("pnlTotalRealized").className = pnlClass(total.realizedPnlUsd);
