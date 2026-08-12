@@ -219,7 +219,7 @@ export const config = Object.freeze({
     pauseStartUtc: number("MAKER_PAUSE_START_UTC", 3),
     pauseEndUtc: number("MAKER_PAUSE_END_UTC", 7),
     maxLossUsd: number("MAKER_MAX_LOSS_USD", 15),
-    dailyMaxLossUsd: number("MAKER_DAILY_MAX_LOSS_USD", 4),
+    dailyMaxLossUsd: number("MAKER_DAILY_MAX_LOSS_USD", 50),
     lossStreakLimit: number("MAKER_LOSS_STREAK_LIMIT", 3),
     cooldownMinutes: number("MAKER_COOLDOWN_MINUTES", 10),
     cooldownRecheckMs: number("MAKER_COOLDOWN_RECHECK_MS", 300000),

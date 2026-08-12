@@ -268,8 +268,8 @@ function renderMaker(payload) {
   const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
   el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "正常" : "已停止";
   el("makerCooldown").textContent = inCooldown
-    ? `至 ${new Date(state.cooldownUntil).toLocaleTimeString()}`
-    : "—";
+    ? `每日止损 ${money(maker.dailyMaxLossUsd)} · 冷却至 ${new Date(state.cooldownUntil).toLocaleTimeString()}`
+    : `每日止损 ${money(maker.dailyMaxLossUsd)}`;
   el("makerPrice").textContent = price ? `$${price.toFixed(4)}` : "—";
   el("makerTriggerInfo").textContent = state.lastDecision?.orderInfo
     ? `触发 $${Number(state.lastDecision.orderInfo.triggerPrice).toFixed(4)}`
