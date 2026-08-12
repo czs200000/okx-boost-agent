@@ -159,6 +159,9 @@ export const config = Object.freeze({
     gridLevels: number("MAKER_GRID_LEVELS", 12),
     mainEnabled: bool("MAKER_GRID_MAIN_ENABLED", true),
     gridBudgetPct: number("MAKER_GRID_BUDGET_PCT", 90),
+    poolDynamicArming: bool("MAKER_GRID_POOL_DYNAMIC_ARMING", true),
+    poolMinLevels: number("MAKER_GRID_POOL_MIN_LEVELS", 2),
+    poolMaxLevels: number("MAKER_GRID_POOL_MAX_LEVELS", 8),
     gridSpacingBps: number("MAKER_GRID_SPACING_BPS", 50),
     gridProfitBps: number("MAKER_GRID_PROFIT_BPS", 50),
     gridDeployPct: number("MAKER_GRID_DEPLOY_PCT", 55),
@@ -194,6 +197,18 @@ export const config = Object.freeze({
       feeRate: 0,
       gasUsd: 0,
       ladderMax: number("MAKER_GRID_CRCLX_LADDER_MAX", 2)
+    },
+    pool4Grid: {
+      enabled: bool("MAKER_GRID_POOL4_ENABLED", false),
+      token: process.env.MAKER_GRID_POOL4_TOKEN || "SPCXx",
+      address: process.env.MAKER_GRID_POOL4_ADDRESS || "0x68fa48b1c2fe52b3d776e1953e0e782b5044ce28",
+      deployPct: number("MAKER_GRID_POOL4_DEPLOY_PCT", 20),
+      levels: number("MAKER_GRID_POOL4_LEVELS", 8),
+      spacingBps: number("MAKER_GRID_POOL4_SPACING_BPS", 30),
+      profitBps: number("MAKER_GRID_POOL4_PROFIT_BPS", 100),
+      feeRate: 0,
+      gasUsd: 0,
+      ladderMax: number("MAKER_GRID_POOL4_LADDER_MAX", 2)
     },
     gridOrderTtlMs: number("MAKER_GRID_ORDER_TTL_MS", 300000),
     gridAiTuning: bool("MAKER_GRID_AI_TUNING", true),

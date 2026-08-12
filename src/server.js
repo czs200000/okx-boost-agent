@@ -1092,17 +1092,26 @@ async function tokenVolume24h(tokenAddress) {
 // neither grid is starved. Runs on an interval; stored in state and applied
 // automatically on subsequent cycles.
 async function evaluateFlowAllocation() {
-  const crclxEnabled = config.maker.crclxGrid.enabled && config.maker.crclxGrid.address;
-  const volumeMain = await tokenVolume24h(config.maker.tokenAddress);
-  const volumeOther = crclxEnabled ? await tokenVolume24h(config.maker.crclxGrid.address) : 0;
-  const totalDeploy = config.maker.gridDeployPct + (crclxEnabled ? config.maker.crclxGrid.deployPct : 0);
-  const alloc = allocateByVolume(volumeMain, volumeOther, totalDeploy, config.maker.flowAllocFloorPct, config.maker.flowAllocCapPct);
-  return {
-    main: alloc.main,
-    crclx: alloc.other,
-    volumeMain: Math.round(volumeMain),
-    volumeOther: Math.round(volumeOther)
-  };
+  const grids = [
+    { key: "main", enabled: config.maker.mainEnabled, address: config.maker.tokenAddress, deploy: config.maker.gridDeployPct },
+    { key: "extra", enabled: config.maker.extraGridEnabled, address: config.maker.extraGridAddress, deploy: config.maker.extraGridDeployPct },
+    { key: "crclx", enabled: config.maker.crclxGrid.enabled, address: config.maker.crclxGrid.address, deploy: config.maker.crclxGrid.deployPct },
+    { key: "pool4", enabled: config.maker.pool4Grid.enabled, address: config.maker.pool4Grid.address, deploy: config.maker.pool4Grid.deployPct }
+  ].filter(g => g.enabled && g.address);
+  const vols = {};
+  for (const g of grids) vols[g.key] = await tokenVolume24h(g.address);
+  const totalVol = Object.values(vols).reduce((s, v) => s + v, 0) || 1;
+  const totalDeploy = grids.reduce((s, g) => s + g.deploy, 0);
+  const alloc = {};
+  grids.forEach(g => {
+    alloc[g.key] = Math.max(config.maker.flowAllocFloorPct, Math.min(config.maker.flowAllocCapPct, totalDeploy * vols[g.key] / totalVol));
+  });
+  const sum = Object.values(alloc).reduce((s, v) => s + v, 0);
+  if (sum > totalDeploy) {
+    const maxKey = grids.reduce((a, g) => alloc[g.key] > alloc[a.key] ? g : a, grids[0]).key;
+    alloc[maxKey] = Math.max(config.maker.flowAllocFloorPct, totalDeploy - (sum - alloc[maxKey]));
+  }
+  return { alloc, vols: Object.fromEntries(Object.entries(vols).map(([k, v]) => [k, Math.round(v)])) };
 }
 
 // Structure-aware anchor (P3): bias the grid mid toward the recent 1H swing
@@ -1281,6 +1290,9 @@ async function makerGridCycle({
   count = config.maker.gridLevels,
   spacingBps = config.maker.gridSpacingBps,
   profitBps = config.maker.gridProfitBps,
+  minLevels = config.maker.poolMinLevels,
+  maxLevels = config.maker.poolMaxLevels,
+  dynamicArming = config.maker.poolDynamicArming,
   midOverride = null,
   aiTuning = true,
   feeRate = gridKey === "grid" ? config.maker.gridFeeRate : gridKey === "gridBtc" ? config.maker.extraGridFeeRate : config.maker.crclxGrid.feeRate,
@@ -1558,13 +1570,29 @@ async function makerGridCycle({
       makerStore.log(`${token} 网格订单过期撤单 第${ao.level}格（${ao.side}）`, "warn");
     }
   }
-  const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused });
+  // Dynamic pool arming: only keep `minLevels + positions` buy levels armed
+  // (capped at maxLevels), so capital flows to coins that are actually
+  // filling. When positions shrink, surplus buy levels are cancelled.
+  const armedCount = dynamicArming
+    ? Math.max(minLevels, Math.min(maxLevels, minLevels + positions.length))
+    : grid.levels.length;
+  for (const ao of [...activeOrders]) {
+    if (ao.side === "buy" && ao.level > armedCount) {
+      try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
+      activeOrders = activeOrders.filter(x => x.orderId !== ao.orderId);
+      makerStore.log(`${token} 动态减档：回收第${ao.level}格买单`, "warn");
+    }
+  }
+  const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused })
+    .filter(order => order.side !== "buy" || order.level <= armedCount);
   // Shared USDT budget: each grid may only keep resting buy orders up to its
   // share (by deployPct) of budgetPct of available USDT, so deep simultaneous
   // dips cannot exceed the wallet balance.
   const crclxDeployPct = config.maker.crclxGrid.enabled ? config.maker.crclxGrid.deployPct : 0;
   const mainDeployPct = config.maker.mainEnabled ? config.maker.gridDeployPct : 0;
-  const deployShare = deployPct / (mainDeployPct + config.maker.extraGridDeployPct + crclxDeployPct);
+  const extraDeployPct = config.maker.extraGridEnabled ? config.maker.extraGridDeployPct : 0;
+  const pool4DeployPct = config.maker.pool4Grid.enabled ? config.maker.pool4Grid.deployPct : 0;
+  const deployShare = deployPct / (mainDeployPct + extraDeployPct + crclxDeployPct + pool4DeployPct);
   const budgetUsd = Math.max(0, usdtBalanceUsd * (config.maker.gridBudgetPct / 100) * deployShare);
   const activeBuyLevels = new Set((activeOrders || []).filter(o => o.side === "buy").map(o => o.level));
   let thisBuyNotional = grid.levels
@@ -1892,7 +1920,9 @@ async function makerCycle(trigger = "timer") {
     // Flow-based allocation (P2): auto-rebalance deploy % between the main
     // grid and CRCLx in proportion to recent on-chain volume, bounded.
     let mainDeployPct = config.maker.gridDeployPct;
+    let extraDeployPct = config.maker.extraGridDeployPct;
     let crclxDeployPct = config.maker.crclxGrid.deployPct;
+    let pool4DeployPct = config.maker.pool4Grid.deployPct;
     if (config.maker.flowAllocEnabled && config.maker.crclxGrid.enabled) {
       const now = Date.now();
       if (!state.flowAllocAt || now - Number(state.flowAllocAt) >= config.maker.flowAllocIntervalMs) {
@@ -1900,11 +1930,10 @@ async function makerCycle(trigger = "timer") {
           const alloc = await evaluateFlowAllocation();
           makerStore.update({
             flowAllocAt: now,
-            deployOverride: { main: alloc.main, crclx: alloc.crclx },
-            flowAllocInfo: { volumeMainUsd: alloc.volumeMain, volumeOtherUsd: alloc.volumeOther, at: now }
+            deployOverride: alloc.alloc,
+            flowAllocInfo: { vols: alloc.vols, at: now }
           });
-          const otherTokenName = config.maker.crclxGrid.token || "第三网格";
-          makerStore.log(`资金流调仓：${config.maker.token} ${alloc.main}% / ${otherTokenName} ${alloc.crclx}%（量 ${alloc.volumeMain} / ${alloc.volumeOther}）`, "info");
+          makerStore.log(`资金流调仓：${JSON.stringify(alloc.alloc)}（量 ${JSON.stringify(alloc.vols)}）`, "info");
         } catch (error) {
           makerStore.log(`资金流调仓失败：${error.message}`, "warn");
         }
@@ -1912,7 +1941,9 @@ async function makerCycle(trigger = "timer") {
       const override = state.deployOverride;
       if (override) {
         mainDeployPct = Number(override.main) || mainDeployPct;
+        extraDeployPct = Number(override.extra) || extraDeployPct;
         crclxDeployPct = Number(override.crclx) || crclxDeployPct;
+        pool4DeployPct = Number(override.pool4) || pool4DeployPct;
       }
     }
 
@@ -2115,7 +2146,7 @@ async function makerCycle(trigger = "timer") {
               token: config.maker.extraGridToken,
               tokenAddress: config.maker.extraGridAddress,
               gridKey: "gridBtc",
-              deployPct: config.maker.extraGridDeployPct,
+              deployPct: extraDeployPct,
               count: config.maker.extraGridLevels,
               spacingBps: config.maker.extraGridSpacingBps,
               profitBps: config.maker.extraGridProfitBps,
@@ -2158,8 +2189,44 @@ async function makerCycle(trigger = "timer") {
               aiTuning: false
             });
           }
+      } catch (error) {
+        makerStore.log(`CRCLx 网格异常：${error.message}`, "warn");
+      }
+    }
+      // Optional fourth grid (SPCXx xStock) — pool member.
+      if (config.maker.pool4Grid.enabled && config.maker.pool4Grid.address) {
+        try {
+          const p4Price = await fetchTokenPrice(config.maker.pool4Grid.address);
+          const p4Asset = (snapshot.wallet.assets || [])
+            .find(a => String(a.tokenAddress || "").toLowerCase() === config.maker.pool4Grid.address.toLowerCase());
+          const p4Units = Number(p4Asset?.balance || 0);
+          let p4Anchor = null;
+          if (config.maker.structureAnchorEnabled) {
+            try { p4Anchor = await structureAnchorPrice(config.maker.pool4Grid.address, p4Price); } catch { /* keep mid */ }
+          }
+          if (p4Price > 0) {
+            await makerGridCycle({
+              wallet,
+              snapshot,
+              price: p4Price,
+              usdtBalanceUsd,
+              inventoryUnits: p4Units,
+              buysPaused: cooldownBlock || regimePaused || downtrendPaused || multiTfPaused,
+              token: config.maker.pool4Grid.token,
+              tokenAddress: config.maker.pool4Grid.address,
+              gridKey: "gridPool4",
+              deployPct: pool4DeployPct,
+              midOverride: p4Anchor,
+              count: config.maker.pool4Grid.levels,
+              spacingBps: config.maker.pool4Grid.spacingBps,
+              profitBps: config.maker.pool4Grid.profitBps,
+              feeRate: config.maker.pool4Grid.feeRate,
+              gasUsd: config.maker.pool4Grid.gasUsd,
+              aiTuning: false
+            });
+          }
         } catch (error) {
-          makerStore.log(`CRCLx 网格异常：${error.message}`, "warn");
+          makerStore.log(`SPCXx 网格异常：${error.message}`, "warn");
         }
       }
       return;
@@ -2686,6 +2753,13 @@ const server = http.createServer(async (request, response) => {
               spacingBps: config.maker.crclxGrid.spacingBps,
               profitBps: config.maker.crclxGrid.profitBps,
               deployPct: config.maker.crclxGrid.deployPct
+            },
+            [config.maker.pool4Grid.token]: {
+              enabled: config.maker.pool4Grid.enabled,
+              levels: config.maker.pool4Grid.levels,
+              spacingBps: config.maker.pool4Grid.spacingBps,
+              profitBps: config.maker.pool4Grid.profitBps,
+              deployPct: config.maker.pool4Grid.deployPct
             }
           }
         },
