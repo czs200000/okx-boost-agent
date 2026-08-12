@@ -234,90 +234,138 @@ function renderHackathon() {
   node.className = days <= 1 ? "pill warn" : "pill";
 }
 
+const MAKER_POOL = ["NVDAx", "OKB", "CRCLx", "SPCXx"];
+const MAKER_POOL_ALLOC_KEY = { NVDAx: "main", OKB: "extra", CRCLx: "crclx", SPCXx: "pool4" };
+const MAKER_POOL_GAS = { NVDAx: "0 Gas", OKB: "0.08% 服务费 + Gas", CRCLx: "0 Gas", SPCXx: "0 Gas" };
+let makerDailyStopUsd = 50;
+
+function makerGridFor(state, token) {
+  if (token === "OKB") return state.gridBtc;
+  if (token === "CRCLx") return state.gridCrclx;
+  if (token === "SPCXx") return state.gridPool4;
+  return state.grid;
+}
+
+function makerWalletPrice(onchain, token) {
+  const asset = (onchain?.wallet?.assets || []).find(a => a.symbol === token);
+  if (asset && Number(asset.balance) > 0) return Number(asset.usdValue) / Number(asset.balance);
+  return null;
+}
+
 function renderMaker(payload) {
-  const { state, wallet, onchain, maker, capabilities, pnlByToken } = payload;
-  const token = maker?.token || "NVDAx";
-  const price = Number(onchain?.prices?.[token] || 0);
-  el("makerTokenTitle").textContent = `${token} 做市轮转`;
-  el("makerInventoryLabel").textContent = `${token} 库存`;
-  el("makerPriceLabel").textContent = `当前 ${token} 价格`;
-  el("makerLegUsd").textContent = money(maker.legUsd);
-  el("makerPauseLabel").textContent = `维护窗口 ${maker.pauseStartUtc}–${maker.pauseEndUtc} UTC · 触发 ±${maker.buyTriggerBps}/${maker.sellTriggerBps}bps`;
-  const gridParams = maker.grids ? Object.entries(maker.grids).map(([tok, g]) => {
-    const state = g.enabled ? "运行" : "停";
-    return `${tok}: ${g.levels}格/${g.spacingBps}bps/+${g.profitBps}bps/${g.deployPct}%(${state})`;
-  }).join(" · ") : "";
-  el("makerGridParams").textContent = gridParams || "网格参数 —";
-  el("makerPhase").textContent = state.phase || "—";
-  el("makerOrderStatus").textContent = state.activeOrderId
-    ? `挂单 ${String(state.activeOrderId).slice(-8)}`
-    : "无挂单";
-  el("makerInventory").textContent = tokenAmount(state.inventoryUnits);
-  el("makerInventoryUsd").textContent = money(Number(state.inventoryUnits || 0) * price);
-  el("makerCostBasis").textContent = money(state.costBasisUsd);
-  const actualRows = Object.values(pnlByToken || {}).filter(row => row?.symbol);
-  const actualFills = actualRows.reduce((sum, row) => sum + Number(row.tradeCount || 0), 0);
-  const actualSells = (state.actualAccounting?.fills || []).filter(fill => fill.side === "SELL" && fill.realizedPnlUsd != null);
-  el("makerRoundTrips").textContent = String(actualSells.length);
-  el("makerTradeCount").textContent = `${actualFills} 笔实际成交`;
-  const usRealized = Number(pnlByToken?.[token]?.realizedPnlUsd || 0);
-  const okbRealized = Number(pnlByToken?.[maker?.extraGridToken || "OKB"]?.realizedPnlUsd || pnlByToken?.OKB?.realizedPnlUsd || 0);
-  el("makerPnl").textContent = money(usRealized + okbRealized);
-  el("makerPnl").className = pnlClass(usRealized + okbRealized);
-  el("makerLossStreak").textContent = `实际回执：美股 ${money(usRealized)} · OKB ${money(okbRealized)}`;
-  const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
-  el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "正常" : "已停止";
-  el("makerCooldown").textContent = inCooldown
-    ? `每日止损 ${money(maker.dailyMaxLossUsd)} · 冷却至 ${new Date(state.cooldownUntil).toLocaleTimeString()}`
-    : `每日止损 ${money(maker.dailyMaxLossUsd)}`;
-  el("makerPrice").textContent = price ? `$${price.toFixed(4)}` : "—";
-  el("makerTriggerInfo").textContent = state.lastDecision?.orderInfo
-    ? `触发 $${Number(state.lastDecision.orderInfo.triggerPrice).toFixed(4)}`
-    : `触发 ±${maker.buyTriggerBps}/${maker.sellTriggerBps}bps`;
-  const usdtAsset = (onchain?.wallet?.assets || []).find(a => a.tokenAddress?.toLowerCase() === maker.quoteAddress?.toLowerCase());
-  el("makerUsdtBalance").textContent = money(usdtAsset?.usdValue || usdtAsset?.balance || 0);
+  const { state, onchain, maker, pnlByToken } = payload;
+  makerDailyStopUsd = maker.dailyMaxLossUsd;
+  const cfg = maker.grids || {};
+  const maxLevels = Math.max(...MAKER_POOL.map(t => cfg[t]?.levels || 8));
+  el("makerTokenTitle").textContent = "动态网格池 · 4 币";
+  el("makerStrategyDesc").textContent = `${MAKER_POOL.join(" · ")}：基础 2 档起，吃格后自动加至 ${maxLevels} 档；30bps 间距，止盈 +75/+100bps，资金按 24h 链上量自动分配。`;
+  el("makerDailyStop").textContent = money(makerDailyStopUsd);
+  el("makerPauseLabel").textContent = `维护窗口 ${maker.pauseStartUtc}–${maker.pauseEndUtc} UTC · 动态加档 2→${maxLevels}`;
+  el("makerGridParams").textContent = Object.entries(cfg).map(([tok, g]) => {
+    const s = g.enabled ? "运行" : "停";
+    return `${tok}: ${g.levels}格/${g.spacingBps}bps/+${g.profitBps}bps/${g.deployPct}%(${s})`;
+  }).join(" · ") || "网格参数 —";
+  renderMakerMetrics(payload);
+  renderMakerPool(payload);
   el("makerSystemStatus").innerHTML = `<i></i>${state.running ? " 运行中" : " 已停止"}`;
   el("makerSystemStatus").className = `status ${state.running ? "" : "paused"}`;
   updateMakerControls(state.running);
   el("makerLogs").innerHTML = state.logs.map(item => `<div class="log"><time>${new Date(item.at).toLocaleTimeString()}</time><span class="${item.level}">${item.level}</span><div>${item.message}</div></div>`).join("");
   renderMakerDecision(state.lastDecision);
-  renderTokenPnl(payload);
 }
 
-function renderTokenPnl(payload) {
-  const pnl = payload?.pnlByToken;
-  if (!pnl) return;
-  const keys = Object.keys(pnl).filter(k => k !== "total");
-  const us = keys[0] ? pnl[keys[0]] : null;
-  const btc = keys[1] ? pnl[keys[1]] : null;
-  const thirdKey = keys.find(k => k !== "NVDAx" && k !== "OKB" && k !== "total");
-  const crclx = thirdKey ? pnl[thirdKey] : null;
-  const total = pnl.total;
-  const fill = (prefix, data, label) => {
-    if (!data) return;
-    if (label) el(`${prefix}Title`).textContent = label;
-    el(`${prefix}Realized`).textContent = money(data.realizedPnlUsd);
-    el(`${prefix}Realized`).className = pnlClass(data.realizedPnlUsd);
-    el(`${prefix}Unrealized`).textContent = money(data.unrealizedUsd);
-    el(`${prefix}Unrealized`).className = pnlClass(data.unrealizedUsd);
-    el(`${prefix}Net`).textContent = money(data.netUsd);
-    el(`${prefix}Net`).className = pnlClass(data.netUsd);
-    el(`${prefix}Meta`).textContent = data.positions != null ? `${data.positions} 仓 · ${data.activeOrders} 单` : "—";
-    el(`${prefix}Volume`).textContent = `${money(data.volumeUsd)} · ${data.winRate == null ? "—" : `${data.winRate}%`}`;
-  };
-  fill("pnlUs", us, `美股 · ${keys[0] || "—"}`);
-  fill("pnlBtc", btc, keys[1] || "BTC");
-  fill("pnlCrclx", crclx, `${thirdKey || "独立"} · 独立模块`);
-  if (total) {
-    el("pnlTotalRealized").textContent = money(total.realizedPnlUsd);
-    el("pnlTotalRealized").className = pnlClass(total.realizedPnlUsd);
-    el("pnlTotalUnrealized").textContent = money(total.unrealizedUsd);
-    el("pnlTotalUnrealized").className = pnlClass(total.unrealizedUsd);
-    el("pnlTotalNet").textContent = money(total.netUsd);
-    el("pnlTotalNet").className = pnlClass(total.netUsd);
-    el("pnlTotalMeta").textContent = `${(us?.positions || 0) + (btc?.positions || 0) + (crclx?.positions || 0)} 仓 · ${(us?.activeOrders || 0) + (btc?.activeOrders || 0) + (crclx?.activeOrders || 0)} 单`;
-    el("pnlTotalVolume").textContent = money((us?.volumeUsd || 0) + (btc?.volumeUsd || 0) + (crclx?.volumeUsd || 0));
-  }
+function renderMakerMetrics(payload) {
+  const { state, onchain, maker, pnlByToken } = payload;
+  const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
+  el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "运行中" : "已停止";
+  const circuitBits = [`每日止损 ${money(maker.dailyMaxLossUsd)}`];
+  if (inCooldown) circuitBits.push(`冷却至 ${new Date(state.cooldownUntil).toLocaleTimeString()}`);
+  if (state.downtrendPaused) circuitBits.push("下跌暂停");
+  if (state.stopReason) circuitBits.push(String(state.stopReason));
+  el("makerCooldown").textContent = circuitBits.join(" · ");
+  el("makerTodayPnl").textContent = money(state.makerDailyPnlUsd);
+  el("makerTodayPnl").className = pnlClass(state.makerDailyPnlUsd);
+  el("makerDayLabel").textContent = `交易日 ${state.makerDayKey || "—"} (UTC)`;
+  const total = pnlByToken?.total || {};
+  el("makerNetPnl").textContent = money(total.netUsd);
+  el("makerNetPnl").className = pnlClass(total.netUsd);
+  el("makerPnlDetail").textContent = `实际已实现 ${money(total.realizedPnlUsd)} · 浮盈亏 ${money(total.unrealizedUsd)}`;
+  const usdtAsset = (onchain?.wallet?.assets || []).find(a => a.tokenAddress?.toLowerCase() === maker.quoteAddress?.toLowerCase());
+  el("makerUsdtBalance").textContent = money(usdtAsset?.usdValue || usdtAsset?.balance || 0);
+  let buys = 0, sells = 0, posCount = 0, posCost = 0;
+  MAKER_POOL.forEach(token => {
+    const grid = makerGridFor(state, token);
+    (grid?.activeOrders || []).forEach(o => String(o.side).toLowerCase() === "buy" ? buys++ : sells++);
+    (grid?.positions || []).forEach(p => { posCount++; posCost += Number(p.costUsd || 0); });
+  });
+  el("makerOrders").textContent = String(buys + sells);
+  el("makerOrdersDetail").textContent = `买单 ${buys} · 卖单 ${sells}`;
+  el("makerPositions").textContent = posCount ? `${posCount} 仓` : "0";
+  el("makerPositionsDetail").textContent = posCost > 0 ? `占用 ${money(posCost)}` : "当前无持仓";
+  const alloc = state.deployOverride || {};
+  el("makerFlowAlloc").textContent = MAKER_POOL.map(t => `${t} ${Number(alloc[MAKER_POOL_ALLOC_KEY[t]] ?? maker.grids?.[t]?.deployPct ?? 0).toFixed(0)}%`).join(" · ");
+  el("makerFlowDetail").textContent = state.flowAllocAt ? `按 24h 链上量 · 更新 ${new Date(state.flowAllocAt).toLocaleTimeString()}` : "按 24h 链上量自动调仓";
+  const reg = state.regimeInfo;
+  el("makerRegime").textContent = reg ? `${reg.trendBps >= 0 ? "上行" : "下行"} ${Math.abs(reg.trendBps).toFixed(1)}bps · 波动 ${Number(reg.rangeBps).toFixed(0)}bps` : "—";
+  el("makerRegimeDetail").textContent = state.downtrendPaused ? "下跌确认：暂停新买单" : (inCooldown ? "冷却中" : "正常交易");
+}
+
+function renderMakerPool(payload) {
+  const { state, onchain, maker, pnlByToken } = payload;
+  const cfg = maker.grids || {};
+  const maxLevels = Math.max(...MAKER_POOL.map(t => cfg[t]?.levels || 8));
+  const cards = MAKER_POOL.map(token => {
+    const grid = makerGridFor(state, token);
+    const c = cfg[token] || {};
+    const pnl = pnlByToken?.[token] || {};
+    const price = grid?.mid || onchain?.prices?.[token] || makerWalletPrice(onchain, token);
+    const positions = grid?.positions || [];
+    const orders = grid?.activeOrders || [];
+    const buys = orders.filter(o => String(o.side).toLowerCase() === "buy");
+    const sells = orders.filter(o => String(o.side).toLowerCase() === "sell");
+    const posUnits = positions.reduce((sum, p) => sum + Number(p.units || 0), 0);
+    const posCost = positions.reduce((sum, p) => sum + Number(p.costUsd || 0), 0);
+    const allocPct = Number(state.deployOverride?.[MAKER_POOL_ALLOC_KEY[token]] ?? c.deployPct ?? 0);
+    const orderDetail = [
+      ...buys.map(o => `买${o.level || "?"}@$${Number(o.price).toFixed(4)}`),
+      ...sells.map(o => `卖${o.level || "?"}@$${Number(o.price).toFixed(4)}`)
+    ].join(" · ");
+    return `<div class="pnl-token pool-card">
+      <div class="pool-head">
+        <h4>${token}</h4>
+        <span class="pill ${c.enabled ? "" : "warn"}">${c.enabled ? "运行" : "停"}</span>
+      </div>
+      <div class="pool-gas ${token === "OKB" ? "has-fee" : ""}">${MAKER_POOL_GAS[token]} · ${c.levels || 8}格/${c.spacingBps || 30}bps/+${c.profitBps || 100}bps · 部署 ${allocPct.toFixed(0)}%</div>
+      <div class="pool-price"><strong>${price ? `$${Number(price).toFixed(4)}` : "—"}</strong><small>2→${c.levels || 8} 档动态</small></div>
+      <div class="pool-meta">持仓 ${positions.length} 仓 · ${tokenAmount(posUnits)} 枚 · ${money(posCost)}</div>
+      <div class="pool-rows">
+        <div class="pnl-row"><span>挂单</span><b title="${escapeHtml(orderDetail)}">买 ${buys.length} · 卖 ${sells.length}</b></div>
+        <div class="pnl-row"><span>实际已实现</span><b class="${pnlClass(pnl.realizedPnlUsd)}">${money(pnl.realizedPnlUsd)}</b></div>
+        <div class="pnl-row"><span>持仓浮盈亏</span><b class="${pnlClass(pnl.unrealizedUsd)}">${money(pnl.unrealizedUsd)}</b></div>
+        <div class="pnl-row"><span>合计净值</span><b class="${pnlClass(pnl.netUsd)}">${money(pnl.netUsd)}</b></div>
+        <div class="pnl-row"><span>交易量 · 胜率</span><b>${money(pnl.volumeUsd)} · ${pnl.winRate == null ? "—" : `${pnl.winRate}%`}</b></div>
+      </div>
+    </div>`;
+  });
+  const total = pnlByToken?.total || {};
+  const allGrids = MAKER_POOL.map(t => makerGridFor(state, t));
+  const posCount = allGrids.reduce((sum, g) => sum + (g?.positions?.length || 0), 0);
+  const orderCount = allGrids.reduce((sum, g) => sum + (g?.activeOrders?.length || 0), 0);
+  const fills = Object.values(pnlByToken || {}).reduce((sum, r) => sum + Number(r.tradeCount || 0), 0);
+  const est = Object.values(pnlByToken || {}).reduce((sum, r) => sum + Number(r.estimatedRealizedPnlUsd || 0), 0);
+  cards.push(`<div class="pnl-token pool-card pool-total">
+    <div class="pool-head"><h4>汇总</h4><span class="pill">POOL</span></div>
+    <div class="pool-gas">4 币 · ${maxLevels} 档 · 30bps · 0 Gas（OKB 除外）</div>
+    <div class="pool-price"><strong class="${pnlClass(total.netUsd)}">${money(total.netUsd)}</strong><small>实际成交净值</small></div>
+    <div class="pool-meta">实际已实现 ${money(total.realizedPnlUsd)} · 浮盈亏 ${money(total.unrealizedUsd)}</div>
+    <div class="pool-rows">
+      <div class="pnl-row"><span>持仓</span><b>${posCount} 仓</b></div>
+      <div class="pnl-row"><span>挂单</span><b>${orderCount} 单</b></div>
+      <div class="pnl-row"><span>已成交</span><b>${fills} 笔</b></div>
+      <div class="pnl-row"><span>估算已实现</span><b>${money(est)}</b></div>
+    </div>
+  </div>`);
+  el("makerPoolGrid").innerHTML = cards.join("");
 }
 
 function updateMakerControls(running) {
@@ -340,17 +388,11 @@ async function refreshMakerLive() {
   try {
     const payload = await api("/api/maker/live");
     const state = payload.state;
-    el("makerPhase").textContent = state.phase || "—";
-    el("makerOrderStatus").textContent = state.activeOrderId ? `挂单 ${String(state.activeOrderId).slice(-8)}` : "无挂单";
-    el("makerRoundTrips").textContent = String(state.roundTrips || 0);
-    el("makerTradeCount").textContent = `${state.tradeCount || 0} 笔实际成交`;
-    const usRealized = Number(state.realizedPnlUsd || 0);
-    const okbRealized = Number(state.realizedPnlBtcUsd || 0);
-    el("makerPnl").textContent = money(usRealized + okbRealized);
-    el("makerPnl").className = pnlClass(usRealized + okbRealized);
-    el("makerLossStreak").textContent = `实际回执：美股 ${money(usRealized)} · OKB ${money(okbRealized)}`;
     const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
-    el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "正常" : "已停止";
+    el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "运行中" : "已停止";
+    const circuitBits = [`每日止损 ${money(makerDailyStopUsd)}`];
+    if (inCooldown) circuitBits.push(`冷却至 ${new Date(state.cooldownUntil).toLocaleTimeString()}`);
+    el("makerCooldown").textContent = circuitBits.join(" · ");
     el("makerSystemStatus").innerHTML = `<i></i>${state.running ? " 运行中" : " 已停止"}`;
     el("makerSystemStatus").className = `status ${state.running ? "" : "paused"}`;
     updateMakerControls(state.running);

@@ -149,11 +149,25 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 .pnl-token h4 { color: var(--green); font-size: 13px; letter-spacing: .04em; margin-bottom: 10px; }
 .pnl-total { border-color: #3a4631; }
 .pnl-total h4 { color: var(--amber); }
+.pool-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.pool-card { display: flex; flex-direction: column; gap: 8px; }
+.pool-card.pool-total { border-color: #3a4631; }
+.pool-total .pool-head h4 { color: var(--amber); }
+.pool-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pool-head h4 { margin: 0; color: var(--green); font-size: 15px; letter-spacing: .04em; }
+.pool-head .pill { font-size: 9px; padding: 3px 8px; letter-spacing: .08em; }
+.pool-gas { color: var(--cyan); font-size: 11px; font-weight: 650; }
+.pool-gas.has-fee { color: var(--amber); }
+.pool-price { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.pool-price strong { font-size: 24px; letter-spacing: -.03em; }
+.pool-price small { color: var(--muted); }
+.pool-meta { color: var(--muted); font-size: 11.5px; padding: 6px 0 8px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.pool-rows .pnl-row { font-size: 12.5px; }
 .pnl-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 12.5px; }
 .pnl-row:last-child { border-bottom: 0; }
 .pnl-row span { color: var(--muted); }
 .pnl-row b { font-weight: 650; }
-@media (max-width: 900px) { .pnl-token-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .pnl-token-grid { grid-template-columns: 1fr 1fr; } .pool-grid { grid-template-columns: 1fr; } }
 
 /* Finance summary panel */
 .table-wrap { overflow-x: auto; margin-top: 14px; }

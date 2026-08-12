@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OKX Boost Agent Workflow</title>
-    <link rel="stylesheet" href="/styles.css?v=11" />
+    <link rel="stylesheet" href="/styles.css?v=12" />
   </head>
   <body>
     <main class="shell">
@@ -16,9 +16,9 @@
       <section id="panelMaker" class="tab-panel hidden">
         <section class="hero panel maker-hero">
           <div>
-            <span class="pill maker-pill">X LAYER · MAKER</span>
-            <h2 id="makerTokenTitle">做市轮转</h2>
-            <p>单一币种限价做市：买低卖高、严格交替、库存中性，模仿前 200 名高频机器人。</p>
+            <span class="pill maker-pill">X LAYER · MAKER 多币网格池</span>
+            <h2 id="makerTokenTitle">动态网格池 · 4 币</h2>
+            <p id="makerStrategyDesc">NVDAx · OKB · CRCLx · SPCXx：基础 2 档起，吃格后自动加至 8 档；30bps 间距，止盈 +75/+100bps，资金按 24h 链上量自动分配。</p>
             <div class="hero-controls">
               <span id="makerSystemStatus" class="status paused"><i></i> 未运行</span>
               <button id="makerStartButton" class="button start-control">启动 Maker 做市</button>
@@ -26,9 +26,9 @@
             </div>
           </div>
           <div class="hero-metric">
-            <span>单笔腿</span>
-            <strong id="makerLegUsd">$200</strong>
-            <small id="makerPauseLabel">维护窗口 03–07 UTC</small>
+            <span>每日止损</span>
+            <strong id="makerDailyStop">$50</strong>
+            <small id="makerPauseLabel">—</small>
           </div>
         </section>
 
@@ -69,52 +69,19 @@
         </section>
 
         <section class="metrics">
-          <article class="metric panel tone-green live-volume"><span>当前相位</span><strong id="makerPhase">—</strong><small id="makerOrderStatus">无挂单</small></article>
-          <article class="metric panel tone-cyan"><span id="makerInventoryLabel">库存</span><strong id="makerInventory">0</strong><small id="makerInventoryUsd">$0.00</small></article>
-          <article class="metric panel tone-amber"><span>库存成本</span><strong id="makerCostBasis">$0.00</strong><small>按实际成交核算</small></article>
-          <article class="metric panel tone-blue"><span>已完成轮次</span><strong id="makerRoundTrips">0</strong><small id="makerTradeCount">0 笔成交记录</small></article>
-          <article class="metric panel tone-cyan"><span>实际成交已实现</span><strong id="makerPnl">$0.00</strong><small id="makerLossStreak">连续亏损 0</small></article>
-          <article class="metric panel tone-red"><span>熔断状态</span><strong id="makerCircuit">正常</strong><small id="makerCooldown">—</small></article>
-          <article class="metric panel tone-violet"><span id="makerPriceLabel">当前价格</span><strong id="makerPrice">—</strong><small id="makerTriggerInfo">触发 ±3bps</small></article>
+          <article class="metric panel tone-green live-volume"><span>池状态</span><strong id="makerCircuit">—</strong><small id="makerCooldown">—</small></article>
+          <article class="metric panel tone-cyan"><span>今日已实现（UTC）</span><strong id="makerTodayPnl">$0.00</strong><small id="makerDayLabel">—</small></article>
+          <article class="metric panel tone-blue"><span>实际成交净值</span><strong id="makerNetPnl">$0.00</strong><small id="makerPnlDetail">—</small></article>
           <article class="metric panel tone-amber"><span>资金池（USDT）</span><strong id="makerUsdtBalance">$0.00</strong><small>Maker 可用余额</small></article>
+          <article class="metric panel tone-cyan"><span>挂单</span><strong id="makerOrders">0</strong><small id="makerOrdersDetail">—</small></article>
+          <article class="metric panel tone-violet"><span>持仓</span><strong id="makerPositions">0</strong><small id="makerPositionsDetail">—</small></article>
+          <article class="metric panel tone-blue"><span>资金分配</span><strong id="makerFlowAlloc">—</strong><small id="makerFlowDetail">按 24h 链上量自动调仓</small></article>
+          <article class="metric panel tone-amber"><span>行情状态</span><strong id="makerRegime">—</strong><small id="makerRegimeDetail">—</small></article>
         </section>
 
         <section class="panel pnl-token-card">
-          <div class="card-title"><div><span class="eyebrow">TOKEN P&amp;L</span><h3>分币种盈亏</h3></div><small id="makerGridParams">网格参数 —</small></div>
-          <div class="pnl-token-grid">
-            <div class="pnl-token">
-              <h4 id="pnlUsTitle">美股 · —</h4>
-              <div class="pnl-row"><span>实际已实现</span><b id="pnlUsRealized">—</b></div>
-              <div class="pnl-row"><span>持仓浮亏</span><b id="pnlUsUnrealized">—</b></div>
-              <div class="pnl-row"><span>合计净值</span><b id="pnlUsNet">—</b></div>
-              <div class="pnl-row"><span>持仓 / 挂单</span><b id="pnlUsMeta">—</b></div>
-              <div class="pnl-row"><span>交易量 · 胜率</span><b id="pnlUsVolume">—</b></div>
-            </div>
-            <div class="pnl-token">
-              <h4 id="pnlBtcTitle">BTC</h4>
-              <div class="pnl-row"><span>实际已实现</span><b id="pnlBtcRealized">—</b></div>
-              <div class="pnl-row"><span>持仓浮亏</span><b id="pnlBtcUnrealized">—</b></div>
-              <div class="pnl-row"><span>合计净值</span><b id="pnlBtcNet">—</b></div>
-              <div class="pnl-row"><span>持仓 / 挂单</span><b id="pnlBtcMeta">—</b></div>
-              <div class="pnl-row"><span>交易量 · 胜率</span><b id="pnlBtcVolume">—</b></div>
-            </div>
-            <div class="pnl-token">
-              <h4 id="pnlCrclxTitle">CRCLx</h4>
-              <div class="pnl-row"><span>实际已实现</span><b id="pnlCrclxRealized">—</b></div>
-              <div class="pnl-row"><span>持仓浮亏</span><b id="pnlCrclxUnrealized">—</b></div>
-              <div class="pnl-row"><span>合计净值</span><b id="pnlCrclxNet">—</b></div>
-              <div class="pnl-row"><span>持仓 / 挂单</span><b id="pnlCrclxMeta">—</b></div>
-              <div class="pnl-row"><span>交易量 · 胜率</span><b id="pnlCrclxVolume">—</b></div>
-            </div>
-            <div class="pnl-token pnl-total">
-              <h4>汇总</h4>
-              <div class="pnl-row"><span>实际已实现</span><b id="pnlTotalRealized">—</b></div>
-              <div class="pnl-row"><span>持仓浮亏</span><b id="pnlTotalUnrealized">—</b></div>
-              <div class="pnl-row"><span>合计净值</span><b id="pnlTotalNet">—</b></div>
-              <div class="pnl-row"><span>全部持仓</span><b id="pnlTotalMeta">—</b></div>
-              <div class="pnl-row"><span>总交易量</span><b id="pnlTotalVolume">—</b></div>
-            </div>
-          </div>
+          <div class="card-title"><div><span class="eyebrow">GRID POOL · 当前交易</span><h3>分币种网格实况</h3></div><small id="makerGridParams">网格参数 —</small></div>
+          <div id="makerPoolGrid" class="pnl-token-grid pool-grid"></div>
         </section>
 
         <section class="grid two lower">
@@ -183,6 +150,6 @@
 
       </section>
     </main>
-    <script type="module" src="/app.js?v=11"></script>
+    <script type="module" src="/app.js?v=12"></script>
   </body>
 </html>
