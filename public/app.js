@@ -482,59 +482,14 @@ async function refreshLive() {
   } catch (error) { console.error(error); }
 }
 
-el("refreshButton").addEventListener("click", refresh);
-el("syncBoostButton").addEventListener("click", async () => {
-  const button = el("syncBoostButton");
-  const before = el("officialVolume").textContent;
-  button.disabled = true;
-  button.textContent = "正在检查官方数据…";
-  try {
-    const payload = await api("/api/boost/sync", { method: "POST", body: "{}" });
-    await refresh();
-    const state = payload.state;
-    if (state.officialBoostSyncStatus === "synced" && el("officialVolume").textContent !== before) {
-      button.textContent = "已更新";
-    } else if (state.officialBoostSyncStatus === "personal_volume_withheld") {
-      button.textContent = "检查完成 · 官方暂无新数据";
-      el("officialSyncStatus").textContent = `刚刚检查完成 · OKX 约每 10 分钟批量更新${state.officialMinVolumeToRankUsd != null ? ` · 入榜线 ${money(state.officialMinVolumeToRankUsd)}` : ""}`;
-    } else {
-      button.textContent = "同步完成";
-    }
-  } catch (error) {
-    button.textContent = "同步失败 · 重试";
-    el("officialSyncStatus").textContent = error.message;
-  } finally {
-    setTimeout(() => {
-      button.disabled = false;
-      button.textContent = "立即检查官方数据";
-    }, 2500);
-  }
-});
-el("syncWalletButton").addEventListener("click", async () => {
-  const button = el("syncWalletButton");
-  button.disabled = true;
-  button.textContent = "同步中…";
-  try { await api("/api/wallet/sync", { method: "POST", body: "{}" }); await refresh(); }
-  finally { button.disabled = false; button.textContent = "立即同步资产"; }
-});
-el("startButton").addEventListener("click", async () => { await api("/api/control", { method: "POST", body: JSON.stringify({ action: "start" }) }); await refresh(); });
-el("stopButton").addEventListener("click", async () => { await api("/api/control", { method: "POST", body: JSON.stringify({ action: "stop" }) }); await refresh(); });
-el("simulateButton").addEventListener("click", async () => {
-  const decision = await api("/api/decision", { method: "POST", body: JSON.stringify({ useDeepSeek: true }) });
-  renderDecision(decision);
-  await refresh();
-});
-el("tabXlayer").addEventListener("click", () => activateTab("xlayer"));
 el("tabMaker").addEventListener("click", () => activateTab("maker"));
 el("tabFinance").addEventListener("click", () => { activateTab("finance"); refreshFinance(); });
 el("financeExportCsv").addEventListener("click", exportFinanceCsv);
 el("financeExportJson").addEventListener("click", exportFinanceJson);
 
 function activateTab(name) {
-  el("panelXlayer").classList.toggle("hidden", name !== "xlayer");
   el("panelMaker").classList.toggle("hidden", name !== "maker");
   el("panelFinance").classList.toggle("hidden", name !== "finance");
-  el("tabXlayer").classList.toggle("active", name === "xlayer");
   el("tabMaker").classList.toggle("active", name === "maker");
   el("tabFinance").classList.toggle("active", name === "finance");
 }
@@ -551,12 +506,9 @@ el("makerCycleButton").addEventListener("click", async () => {
   await refreshMaker();
 });
 
-refresh();
 refreshMaker();
 renderHackathon();
 refreshFinance();
-setInterval(refreshLive, 2000);
-setInterval(refresh, 15000);
 setInterval(refreshMakerLive, 4000);
 setInterval(refreshMaker, 15000);
 setInterval(renderHackathon, 30000);

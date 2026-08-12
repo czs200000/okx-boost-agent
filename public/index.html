@@ -8,102 +8,10 @@
   </head>
   <body>
     <main class="shell">
-      <header class="topbar">
-        <div>
-          <div class="eyebrow">AUTONOMOUS OPERATIONS</div>
-          <h1>Boost Agent Control Room</h1>
-        </div>
-        <div class="header-actions">
-          <span id="systemStatus" class="status paused"><i></i> Paper mode</span>
-          <button id="refreshButton" class="button ghost">刷新</button>
-          <button id="startButton" class="button start-control">启动自动执行</button>
-          <button id="stopButton" class="button stop-control armed">紧急停止</button>
-        </div>
-      </header>
-
       <nav class="tabs" aria-label="活动切换">
         <button id="tabFinance" class="tab active" type="button">控制台</button>
-        <button id="tabXlayer" class="tab" type="button">X Layer RWA</button>
         <button id="tabMaker" class="tab" type="button">Maker 做市</button>
       </nav>
-
-      <section id="panelXlayer" class="tab-panel hidden">
-      <section class="hero panel">
-        <div>
-          <span class="pill">X LAYER · RWA</span>
-          <h2>参与 X Layer RWA 交易赛</h2>
-          <p>连接 Agentic Wallet 并验证 Boost 归因后，系统可使用单仓策略、确定性风控和链上报价执行。</p>
-        </div>
-        <div class="hero-metric">
-          <span>奖励池</span>
-          <strong id="rewardPool">$50,000</strong>
-          <small>TOP 600</small>
-        </div>
-      </section>
-
-      <section class="metrics">
-        <article class="metric panel tone-green live-volume"><span>本地实时交易量</span><strong id="boostVolume">$0.00</strong><small id="volumeUpdatedAt">每笔广播立即统计</small></article>
-        <article class="metric panel tone-cyan"><span>Boost 官方已确认</span><strong id="officialVolume">$0.00</strong><small id="officialSyncStatus">等待首次官方检查</small><button id="syncBoostButton" class="button ghost metric-sync">立即检查官方数据</button></article>
-        <article class="metric panel tone-red"><span>官方上榜最低交易量</span><strong id="officialRankThreshold">—</strong><small>随 Boost 排行榜动态更新</small></article>
-        <article class="metric panel tone-blue"><span>累计交易笔数</span><strong id="tradeCount">0</strong><small>仅统计已广播交易</small></article>
-        <article class="metric panel tone-cyan"><span>当前排名</span><strong id="rank">—</strong><small id="rankStatus">每 10 分钟更新</small></article>
-        <article class="metric panel tone-amber"><span>累计交易成本</span><strong id="tradingCosts">$0.00</strong><small>价差、冲击与交易费</small></article>
-        <article id="pnlMetric" class="metric panel tone-green"><span>总盈亏 · 真实净值</span><strong id="totalPnl">$0.00</strong><small id="totalPnlDetail">今日净值变动 — · 今日已实现 $0.00 · 浮动 $0.00</small></article>
-        <article class="metric panel tone-violet"><span>预估奖励</span><strong id="estimatedReward">$0.00</strong><small>未计概率折扣</small></article>
-      </section>
-
-      <section class="volume-progress panel">
-        <div><span>下一奖励档位参考线（达到后自动晋级）</span><b id="volumeProgressLabel">$0 / $650</b></div>
-        <div class="progress-track"><i id="volumeProgressBar"></i></div>
-      </section>
-
-      <section id="marketStrip" class="market-strip panel"></section>
-
-      <section class="panel wallet-assets-card">
-        <div class="card-title">
-          <div><span class="eyebrow">X LAYER WALLET</span><h3>钱包资产明细</h3></div>
-          <div class="wallet-total"><span>资产总值</span><strong id="walletTotalValue">$0.00</strong><button id="syncWalletButton" class="button ghost wallet-sync">立即同步资产</button></div>
-        </div>
-        <div class="wallet-meta">
-          <span id="walletAssetAddress">钱包未连接</span>
-          <span id="pendingOfficialVolume">待官方确认 $0.00</span>
-        </div>
-        <div class="asset-table-wrap">
-          <table class="asset-table">
-            <thead><tr><th>资产</th><th>余额</th><th>美元价值</th><th>占比</th><th>合约</th></tr></thead>
-            <tbody id="walletAssets"><tr><td colspan="5" class="asset-empty">正在读取资产…</td></tr></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="grid two">
-        <article class="panel card">
-          <div class="card-title"><div><span class="eyebrow">EXECUTION</span><h3>执行链路</h3></div><span id="executionBadge" class="pill warn">LOCKED</span></div>
-          <div class="steps">
-            <div class="step done"><b>1</b><div><strong>策略与风控服务</strong><span>本地运行，确定性限制</span></div></div>
-            <div id="deepseekStep" class="step"><b>2</b><div><strong>DeepSeek 分析层</strong><span id="deepseekText">等待 API Key</span></div></div>
-            <div id="walletStep" class="step"><b>3</b><div><strong>Agentic Wallet</strong><span>等待邮箱登录与钱包创建</span></div></div>
-            <div id="attributionStep" class="step"><b>4</b><div><strong>Boost 归因测试</strong><span>等待小额实测与官方确认</span></div></div>
-          </div>
-        </article>
-
-        <article class="panel card">
-          <div class="card-title"><div><span class="eyebrow">RISK</span><h3>硬性风控</h3></div><span class="pill safe">ENFORCED</span></div>
-          <dl id="riskList" class="risk-list"></dl>
-        </article>
-      </section>
-
-      <section class="grid two lower">
-        <article class="panel card">
-          <div class="card-title"><div><span class="eyebrow">AI DECISION</span><h3>最近决策</h3></div><button id="simulateButton" class="button">生成分析</button></div>
-          <div id="decision" class="decision empty">尚无策略决策</div>
-        </article>
-        <article class="panel card">
-          <div class="card-title"><div><span class="eyebrow">EVENT STREAM</span><h3>工作流日志</h3></div></div>
-          <div id="logs" class="logs"></div>
-        </article>
-      </section>
-      </section>
 
       <section id="panelMaker" class="tab-panel hidden">
         <section class="hero panel maker-hero">
