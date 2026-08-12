@@ -25,6 +25,7 @@ import { actualFillFromOrder, actualTokenSummary, applyActualFill, emptyActualAc
 import { makerDecision, shouldCancelMakerOrder } from "./core/maker.js";
 import { analyzeStabilization, analyzeDowntrend } from "./core/kline-analysis.js";
 import { buildGrid, allocateLevelUsd, applyKnownActualCosts, attributeBuys, attributeSells, nextOrders, gridTotals, reconcileActualBuy } from "./core/grid.js";
+import { allocateByVolume } from "./core/flow-alloc.js";
 import { startFeishuGateway } from "./feishu-gateway.js";
 
 const execFileAsync = promisify(execFile);
@@ -1049,6 +1050,81 @@ async function analyzeMakerMarket(tokenAddress = config.maker.tokenAddress) {
   };
 }
 
+// Multi-timeframe trend gate (P1): pause NEW buys when the 4H trend is a
+// confirmed downtrend AND the 1H chart has not stabilized. Existing positions
+// and sell orders are untouched — this only stops catching falling knives.
+async function analyzeMultiTimeframeTrend(tokenAddress = config.maker.tokenAddress) {
+  const [h1Payload, h4Payload] = await Promise.all([
+    runOnchainos(["market", "kline", "--address", tokenAddress, "--chain", "xlayer", "--bar", "1H", "--limit", "48"]),
+    runOnchainos(["market", "kline", "--address", tokenAddress, "--chain", "xlayer", "--bar", "4H", "--limit", "48"])
+  ]);
+  const toCandles = payload => (payload?.data || [])
+    .filter(c => Number(c.confirm) === 1)
+    .slice(0, 48)
+    .reverse()
+    .map(c => ({ o: Number(c.o), h: Number(c.h), l: Number(c.l), c: Number(c.c), t: Number(c.ts) }));
+  const h1 = toCandles(h1Payload);
+  const h4 = toCandles(h4Payload);
+  const h4Trend = analyzeDowntrend(h4);
+  const h1Stable = analyzeStabilization(h1);
+  if (!h4Trend.ok || !h1Stable.ok) {
+    return { ok: false, reason: h4Trend.ok ? h1Stable.reason : h4Trend.reason };
+  }
+  return {
+    ok: true,
+    paused: Boolean(h4Trend.confirmed && !h1Stable.stable),
+    h4Downtrend: Boolean(h4Trend.confirmed),
+    h1Stable: Boolean(h1Stable.stable),
+    reasons: [...h4Trend.reasons, ...h1Stable.reasons].slice(0, 5)
+  };
+}
+
+// 24h on-chain volume proxy for a token (sum of 1H candle volUsd).
+async function tokenVolume24h(tokenAddress) {
+  const { payload } = await runOnchainos(["market", "kline", "--address", tokenAddress, "--chain", "xlayer", "--bar", "1H", "--limit", "24"]);
+  return (payload?.data || [])
+    .filter(c => Number(c.confirm) === 1)
+    .reduce((sum, c) => sum + Number(c.volUsd || 0), 0);
+}
+
+// Flow-based allocation (P2): split deployed capital between the main grid and
+// CRCLx in proportion to each token's recent on-chain volume, bounded so
+// neither grid is starved. Runs on an interval; stored in state and applied
+// automatically on subsequent cycles.
+async function evaluateFlowAllocation() {
+  const crclxEnabled = config.maker.crclxGrid.enabled && config.maker.crclxGrid.address;
+  const volumeMain = await tokenVolume24h(config.maker.tokenAddress);
+  const volumeOther = crclxEnabled ? await tokenVolume24h(config.maker.crclxGrid.address) : 0;
+  const totalDeploy = config.maker.gridDeployPct + (crclxEnabled ? config.maker.crclxGrid.deployPct : 0);
+  const alloc = allocateByVolume(volumeMain, volumeOther, totalDeploy, config.maker.flowAllocFloorPct, config.maker.flowAllocCapPct);
+  return {
+    main: alloc.main,
+    crclx: alloc.other,
+    volumeMain: Math.round(volumeMain),
+    volumeOther: Math.round(volumeOther)
+  };
+}
+
+// Structure-aware anchor (P3): bias the grid mid toward the recent 1H swing
+// low so buy levels cluster near where support actually is (缠论-style
+// pullback entries instead of mechanical equal spacing from the mid).
+async function structureAnchorPrice(tokenAddress, price) {
+  if (!config.maker.structureAnchorEnabled || !(price > 0)) return price;
+  try {
+    const { payload } = await runOnchainos(["market", "kline", "--address", tokenAddress, "--chain", "xlayer", "--bar", "1H", "--limit", "48"]);
+    const lows = (payload?.data || [])
+      .filter(c => Number(c.confirm) === 1)
+      .map(c => Number(c.l))
+      .filter(v => v > 0);
+    if (!lows.length) return price;
+    const low = Math.min(...lows);
+    if (low >= price) return price;
+    return price - (price - low) * config.maker.structureAnchorFactor;
+  } catch {
+    return price;
+  }
+}
+
 async function fetchTokenPrice(tokenAddress) {
   const { payload } = await runOnchainos(["market", "price", "--address", tokenAddress, "--chain", "xlayer"]);
   if (!payload?.ok) throw new Error(payload?.error || "price fetch failed");
@@ -1205,6 +1281,7 @@ async function makerGridCycle({
   count = config.maker.gridLevels,
   spacingBps = config.maker.gridSpacingBps,
   profitBps = config.maker.gridProfitBps,
+  midOverride = null,
   aiTuning = true,
   feeRate = gridKey === "grid" ? config.maker.gridFeeRate : gridKey === "gridBtc" ? config.maker.extraGridFeeRate : config.maker.crclxGrid.feeRate,
   gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : gridKey === "gridBtc" ? config.maker.extraGridGasUsd : config.maker.crclxGrid.gasUsd,
@@ -1258,7 +1335,7 @@ async function makerGridCycle({
   // 1. Initialize the grid on first run / after recovery.
   if (!grid?.levels?.length) {
     const built = allocateLevelUsd(buildGrid({
-      mid: price,
+      mid: midOverride ?? price,
       spacingBps,
       profitBps,
       count
@@ -1398,7 +1475,7 @@ async function makerGridCycle({
     }
     const deployedUsd = grid.levels.reduce((sum, l) => sum + l.buyUsd, 0);
     const rebuilt = allocateLevelUsd(buildGrid({
-      mid: price,
+      mid: midOverride ?? price,
       spacingBps: grid.spacingBps,
       profitBps,
       count
@@ -1785,6 +1862,66 @@ async function makerCycle(trigger = "timer") {
       }
     }
 
+    // Multi-timeframe trend gate (P1): 4H downtrend + 1H not stabilized ->
+    // pause NEW buys across all grids (positions and sells stay untouched).
+    let multiTfPaused = false;
+    if (config.maker.trendMultiTfEnabled) {
+      const now = Date.now();
+      if (!state.multiTfCheckedAt || now - Number(state.multiTfCheckedAt) >= config.maker.trendMultiTfIntervalMs) {
+        try {
+          const tf = await analyzeMultiTimeframeTrend();
+          if (tf.ok) {
+            multiTfPaused = Boolean(tf.paused);
+            makerStore.update({
+              multiTfPaused,
+              multiTfCheckedAt: now,
+              multiTfInfo: { h4Downtrend: tf.h4Downtrend, h1Stable: tf.h1Stable, checkedAt: now }
+            });
+            if (tf.paused) {
+              makerStore.log(`多周期趋势闸门：4H下跌 + 1H未企稳 — 暂停新买入（持仓保留）`, "warn");
+            }
+          }
+        } catch (error) {
+          makerStore.log(`多周期趋势检查失败：${error.message}`, "warn");
+        }
+      } else {
+        multiTfPaused = Boolean(state.multiTfPaused);
+      }
+    }
+
+    // Flow-based allocation (P2): auto-rebalance deploy % between the main
+    // grid and CRCLx in proportion to recent on-chain volume, bounded.
+    let mainDeployPct = config.maker.gridDeployPct;
+    let crclxDeployPct = config.maker.crclxGrid.deployPct;
+    if (config.maker.flowAllocEnabled && config.maker.crclxGrid.enabled) {
+      const now = Date.now();
+      if (!state.flowAllocAt || now - Number(state.flowAllocAt) >= config.maker.flowAllocIntervalMs) {
+        try {
+          const alloc = await evaluateFlowAllocation();
+          makerStore.update({
+            flowAllocAt: now,
+            deployOverride: { main: alloc.main, crclx: alloc.crclx },
+            flowAllocInfo: { volumeMainUsd: alloc.volumeMain, volumeOtherUsd: alloc.volumeOther, at: now }
+          });
+          makerStore.log(`资金流调仓：NVDAx ${alloc.main}% / CRCLx ${alloc.crclx}%（量 ${alloc.volumeMain} / ${alloc.volumeOther}）`, "info");
+        } catch (error) {
+          makerStore.log(`资金流调仓失败：${error.message}`, "warn");
+        }
+      }
+      const override = state.deployOverride;
+      if (override) {
+        mainDeployPct = Number(override.main) || mainDeployPct;
+        crclxDeployPct = Number(override.crclx) || crclxDeployPct;
+      }
+    }
+
+    // Structure-aware anchor (P3): bias grid mids toward recent 1H swing lows.
+    let mainAnchor = null;
+    let crclxAnchor = null;
+    if (config.maker.structureAnchorEnabled) {
+      try { mainAnchor = await structureAnchorPrice(config.maker.tokenAddress, price); } catch { /* keep mid */ }
+    }
+
     const hourUtc = new Date().getUTCHours();
     const pauseWindow = config.maker.pauseStartUtc < config.maker.pauseEndUtc
       && hourUtc >= config.maker.pauseStartUtc && hourUtc < config.maker.pauseEndUtc;
@@ -1939,7 +2076,9 @@ async function makerCycle(trigger = "timer") {
           price,
           usdtBalanceUsd,
           inventoryUnits,
-          buysPaused: cooldownBlock || regimePaused || downtrendPaused || priceJumpSuspicious
+          buysPaused: cooldownBlock || regimePaused || downtrendPaused || multiTfPaused || priceJumpSuspicious,
+          deployPct: mainDeployPct,
+          midOverride: mainAnchor
         });
       }
       // Optional second grid (e.g. BTC) runs alongside the primary token.
@@ -1971,7 +2110,7 @@ async function makerCycle(trigger = "timer") {
               price: extraPrice,
               usdtBalanceUsd,
               inventoryUnits: extraUnits,
-              buysPaused: cooldownBlock || regimePaused || downtrendPaused,
+              buysPaused: cooldownBlock || regimePaused || downtrendPaused || multiTfPaused,
               token: config.maker.extraGridToken,
               tokenAddress: config.maker.extraGridAddress,
               gridKey: "gridBtc",
@@ -1993,6 +2132,10 @@ async function makerCycle(trigger = "timer") {
           const crclxAsset = (snapshot.wallet.assets || [])
             .find(a => String(a.tokenAddress || "").toLowerCase() === config.maker.crclxGrid.address.toLowerCase());
           const crclxUnits = Number(crclxAsset?.balance || 0);
+          let crclxAnchor = null;
+          if (config.maker.structureAnchorEnabled) {
+            try { crclxAnchor = await structureAnchorPrice(config.maker.crclxGrid.address, crclxPrice); } catch { /* keep mid */ }
+          }
           if (crclxPrice > 0) {
             await makerGridCycle({
               wallet,
@@ -2000,11 +2143,12 @@ async function makerCycle(trigger = "timer") {
               price: crclxPrice,
               usdtBalanceUsd,
               inventoryUnits: crclxUnits,
-              buysPaused: cooldownBlock || regimePaused || downtrendPaused,
+              buysPaused: cooldownBlock || regimePaused || downtrendPaused || multiTfPaused,
               token: config.maker.crclxGrid.token,
               tokenAddress: config.maker.crclxGrid.address,
               gridKey: "gridCrclx",
-              deployPct: config.maker.crclxGrid.deployPct,
+              deployPct: crclxDeployPct,
+              midOverride: crclxAnchor,
               count: config.maker.crclxGrid.levels,
               spacingBps: config.maker.crclxGrid.spacingBps,
               profitBps: config.maker.crclxGrid.profitBps,
