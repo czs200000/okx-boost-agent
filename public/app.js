@@ -235,7 +235,7 @@ function renderHackathon() {
 }
 
 function renderMaker(payload) {
-  const { state, wallet, onchain, maker, capabilities } = payload;
+  const { state, wallet, onchain, maker, capabilities, pnlByToken } = payload;
   const token = maker?.token || "NVDAx";
   const price = Number(onchain?.prices?.[token] || 0);
   el("makerTokenTitle").textContent = `${token} 做市轮转`;
@@ -243,6 +243,11 @@ function renderMaker(payload) {
   el("makerPriceLabel").textContent = `当前 ${token} 价格`;
   el("makerLegUsd").textContent = money(maker.legUsd);
   el("makerPauseLabel").textContent = `维护窗口 ${maker.pauseStartUtc}–${maker.pauseEndUtc} UTC · 触发 ±${maker.buyTriggerBps}/${maker.sellTriggerBps}bps`;
+  const gridParams = maker.grids ? Object.entries(maker.grids).map(([tok, g]) => {
+    const state = g.enabled ? "运行" : "停";
+    return `${tok}: ${g.levels}格/${g.spacingBps}bps/+${g.profitBps}bps/${g.deployPct}%(${state})`;
+  }).join(" · ") : "";
+  el("makerGridParams").textContent = gridParams || "网格参数 —";
   el("makerPhase").textContent = state.phase || "—";
   el("makerOrderStatus").textContent = state.activeOrderId
     ? `挂单 ${String(state.activeOrderId).slice(-8)}`
@@ -250,14 +255,16 @@ function renderMaker(payload) {
   el("makerInventory").textContent = tokenAmount(state.inventoryUnits);
   el("makerInventoryUsd").textContent = money(Number(state.inventoryUnits || 0) * price);
   el("makerCostBasis").textContent = money(state.costBasisUsd);
-  const sells = (state.trades || []).filter(t => t.kind === "SELL");
-  el("makerRoundTrips").textContent = String(sells.length);
-  el("makerTradeCount").textContent = `${(state.trades || []).length} 笔成交记录`;
-  const usRealized = Number(state.realizedPnlUsd || 0);
-  const okbRealized = Number(state.realizedPnlBtcUsd || 0);
+  const actualRows = Object.values(pnlByToken || {}).filter(row => row?.symbol);
+  const actualFills = actualRows.reduce((sum, row) => sum + Number(row.tradeCount || 0), 0);
+  const actualSells = (state.actualAccounting?.fills || []).filter(fill => fill.side === "SELL" && fill.realizedPnlUsd != null);
+  el("makerRoundTrips").textContent = String(actualSells.length);
+  el("makerTradeCount").textContent = `${actualFills} 笔实际成交`;
+  const usRealized = Number(pnlByToken?.[token]?.realizedPnlUsd || 0);
+  const okbRealized = Number(pnlByToken?.[maker?.extraGridToken || "OKB"]?.realizedPnlUsd || pnlByToken?.OKB?.realizedPnlUsd || 0);
   el("makerPnl").textContent = money(usRealized + okbRealized);
   el("makerPnl").className = pnlClass(usRealized + okbRealized);
-  el("makerLossStreak").textContent = `美股 ${money(usRealized)} · OKB ${money(okbRealized)} · 连亏 ${Math.max(Number(state.lossStreak || 0), Number(state.lossStreakBtc || 0))}`;
+  el("makerLossStreak").textContent = `实际回执：美股 ${money(usRealized)} · OKB ${money(okbRealized)}`;
   const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
   el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "正常" : "已停止";
   el("makerCooldown").textContent = inCooldown
@@ -335,12 +342,12 @@ async function refreshMakerLive() {
     el("makerPhase").textContent = state.phase || "—";
     el("makerOrderStatus").textContent = state.activeOrderId ? `挂单 ${String(state.activeOrderId).slice(-8)}` : "无挂单";
     el("makerRoundTrips").textContent = String(state.roundTrips || 0);
-    el("makerTradeCount").textContent = `${state.tradeCount || 0} 笔成交记录`;
+    el("makerTradeCount").textContent = `${state.tradeCount || 0} 笔实际成交`;
     const usRealized = Number(state.realizedPnlUsd || 0);
     const okbRealized = Number(state.realizedPnlBtcUsd || 0);
     el("makerPnl").textContent = money(usRealized + okbRealized);
     el("makerPnl").className = pnlClass(usRealized + okbRealized);
-    el("makerLossStreak").textContent = `美股 ${money(usRealized)} · OKB ${money(okbRealized)} · 连亏 ${Math.max(Number(state.lossStreak || 0), Number(state.lossStreakBtc || 0))}`;
+    el("makerLossStreak").textContent = `实际回执：美股 ${money(usRealized)} · OKB ${money(okbRealized)}`;
     const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
     el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "正常" : "已停止";
     el("makerSystemStatus").innerHTML = `<i></i>${state.running ? " 运行中" : " 已停止"}`;
@@ -371,10 +378,10 @@ function renderFinance(payload) {
   el("financeNetPnl2").textContent = money(net);
   el("financeNetPnl2").className = pnlClass(net);
   el("financeBaseCapital").textContent = `资金基准 ${money(summary.baseCapitalUsd)}`;
-  el("financeRealizedSum").textContent = money(summary.realizedProjectsUsd);
+  el("financeRealizedSum").textContent = money(summary.estimatedProjectsUsd ?? summary.realizedProjectsUsd);
   el("financeActive").textContent = String(summary.activeProjects || 0);
   el("financeGenerated").textContent = summary.generatedAt ? `更新 ${new Date(summary.generatedAt).toLocaleTimeString()}` : "—";
-  el("financeWalletUpdated").textContent = wallet.updatedAt ? `更新 ${new Date(wallet.updatedAt).toLocaleTimeString()}` : "—";
+  el("financeWalletUpdated").textContent = `${wallet.updatedAt ? `更新 ${new Date(wallet.updatedAt).toLocaleTimeString()}` : "—"} · ${trendText}`;
 
   el("financeTable").innerHTML = projects.map(p => `
     <tr>
@@ -397,6 +404,11 @@ function renderFinance(payload) {
     if (p.strategy) items.push(["策略", p.strategy]);
     if (p.startedAt) items.push(["启动", new Date(p.startedAt).toLocaleString()]);
     if (p.moduleCounterUsd != null) items.push(["模块计数", money(p.moduleCounterUsd)]);
+    if (p.actualNetPnlUsd != null) items.push(["实际成交净盈亏", money(p.actualNetPnlUsd)]);
+    if (p.estimatedNetPnlUsd != null) items.push(["模块估算净盈亏", money(p.estimatedNetPnlUsd)]);
+    if (p.walletPnlSinceBaselineUsd != null) items.push(["钱包净值（新口径）", money(p.walletPnlSinceBaselineUsd)]);
+    if (p.walletBaselineAt) items.push(["净值基准时间", new Date(p.walletBaselineAt).toLocaleString()]);
+    if (p.accountingBasis) items.push(["统计口径", p.accountingBasis]);
     if (p.rank != null) items.push(["官方排名", String(p.rank)]);
     if (p.estimatedRewardUsd) items.push(["预估奖励", money(p.estimatedRewardUsd)]);
     if (p.note) items.push(["备注", p.note]);
@@ -428,7 +440,7 @@ function downloadFile(name, content, type) {
 
 function exportFinanceCsv() {
   api("/api/finance/summary").then(payload => {
-    const header = ["项目", "链", "状态", "累计盈亏USDT", "交易量USDT", "笔数", "胜率%", "策略", "备注"];
+    const header = ["项目", "链", "状态", "实际已实现盈亏USDT", "交易量USDT", "笔数", "胜率%", "策略", "备注"];
     const rows = payload.projects.map(p => [
       p.name, p.chain, p.status, p.realizedPnlUsd, p.volumeUsd, p.tradeCount ?? "", p.winRate ?? "",
       p.strategy, p.note ?? ""

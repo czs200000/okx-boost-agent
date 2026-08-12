@@ -21,9 +21,10 @@ import { liquidityCandidates, liquidityQuoteAcceptable, projectedWorstLossUsd } 
 import { usEquitySession } from "./core/us-equity-session.js";
 import { chooseAdaptiveTiming, summarizeTradeWindow } from "./core/adaptive-timing.js";
 import { reconcileTradeAccounting } from "./core/trade-accounting.js";
+import { actualFillFromOrder, actualTokenSummary, applyActualFill, emptyActualAccounting } from "./core/actual-order-accounting.js";
 import { makerDecision, shouldCancelMakerOrder } from "./core/maker.js";
 import { analyzeStabilization, analyzeDowntrend } from "./core/kline-analysis.js";
-import { buildGrid, allocateLevelUsd, attributeBuys, attributeSells, nextOrders, gridTotals } from "./core/grid.js";
+import { buildGrid, allocateLevelUsd, applyKnownActualCosts, attributeBuys, attributeSells, nextOrders, gridTotals, reconcileActualBuy } from "./core/grid.js";
 import { startFeishuGateway } from "./feishu-gateway.js";
 
 const execFileAsync = promisify(execFile);
@@ -986,6 +987,9 @@ const scheduleAeonPositionMonitor = () => {
 // mid, inventory neutral, small spread capture per round trip.
 // ---------------------------------------------------------------------------
 const makerStore = new MemoryStore(new URL("../data/state-maker.json", import.meta.url), "MAKER_");
+if (!makerStore.read().actualAccounting) {
+  makerStore.update({ actualAccounting: emptyActualAccounting() });
+}
 let makerCycleBusy = false;
 let makerTimer = null;
 
@@ -1203,7 +1207,9 @@ async function makerGridCycle({
   profitBps = config.maker.gridProfitBps,
   aiTuning = true,
   feeRate = gridKey === "grid" ? config.maker.gridFeeRate : gridKey === "gridBtc" ? config.maker.extraGridFeeRate : config.maker.crclxGrid.feeRate,
-  gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : gridKey === "gridBtc" ? config.maker.extraGridGasUsd : config.maker.crclxGrid.gasUsd
+  gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : gridKey === "gridBtc" ? config.maker.extraGridGasUsd : config.maker.crclxGrid.gasUsd,
+  buySlippagePct = gridKey === "grid" ? config.maker.gridBuySlippagePct : config.maker.extraGridBuySlippagePct,
+  sellSlippagePct = gridKey === "grid" ? config.maker.gridSellSlippagePct : config.maker.extraGridSellSlippagePct
 }) {
   const keyMap = {
     grid: { realized: "realizedPnlUsd", streak: "lossStreak" },
@@ -1219,6 +1225,35 @@ async function makerGridCycle({
   const priceJumpBps = lastGridPrice > 0 ? Math.abs(price / lastGridPrice - 1) * 10000 : 0;
   const gridJumpPaused = priceJumpBps > config.maker.priceJumpGuardBps;
   if (gridJumpPaused) buysPaused = true;
+
+  // Rebuild unfilled levels when an operator changes the configured shape.
+  // Existing inventory keeps its cost basis, but its target is recalculated
+  // from that cost whenever the configured profit requirement changes.
+  if (grid?.levels?.length && (
+    Number(grid.count) !== Number(count)
+    || Number(grid.spacingBps) !== Number(spacingBps)
+    || Number(grid.profitBps) !== Number(profitBps)
+  )) {
+    const rebuilt = allocateLevelUsd(buildGrid({
+      mid: price,
+      spacingBps,
+      profitBps,
+      count
+    }), usdtBalanceUsd * deployPct / 100, config.maker.gridLadderMax);
+    grid = {
+      ...rebuilt,
+      positions: (grid.positions || []).map(position => {
+        const unitCost = Number(position.units || 0) > 0 ? Number(position.costUsd || 0) / Number(position.units) : 0;
+        return { ...position, sellPrice: unitCost * (1 + Number(profitBps) / 10000) };
+      }),
+      activeOrders: [],
+      initializedAt: Date.now(),
+      lastAiTuneAt: 0,
+      lastPrice: price
+    };
+    makerStore.update({ [gridKey]: grid });
+    makerStore.log(`${token} 网格参数已应用：${count} 格 × ${spacingBps}bps / +${profitBps}bps，保留 ${(grid.positions || []).length} 格原持仓`, "info");
+  }
 
   // 1. Initialize the grid on first run / after recovery.
   if (!grid?.levels?.length) {
@@ -1254,7 +1289,7 @@ async function makerGridCycle({
         positions.push({
           level: fill.level, units: fill.units, price: fill.price,
           sellPrice: level.sellPrice, costUsd: fill.units * fill.price * (1 + feeRate),
-          filledAt: new Date().toISOString()
+          filledAt: new Date().toISOString(), filledAtMs: Date.now(), estimatedFromBalance: true
         });
         makerStore.log(`${token} 网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
       }
@@ -1420,6 +1455,12 @@ async function makerGridCycle({
   // TTL rotation and order sync (but still counted as resting exposure).
   const manualOrderIds = new Set((config.maker.extraGridManualOrderIds || []).map(String));
   const botTokenOrders = tokenOrders.filter(o => !manualOrderIds.has(String(o.orderId)));
+  const receiptSync = await syncActualCompletedOrders(token, grid.activeOrders || [], botTokenOrders);
+  positions = applyKnownActualCosts(positions, receiptSync.accounting, token, profitBps);
+  for (const fill of receiptSync.newFills.filter(item => item.side === "BUY")) {
+    positions = reconcileActualBuy(positions, fill, profitBps);
+  }
+  makerStore.update({ [gridKey]: { ...grid, positions, lastPrice: price } });
   const placedIds = new Set((makerStore.read().placedOrderIds || []).map(String));
   let activeOrders = (grid.activeOrders || []).filter(ao => botTokenOrders.some(o => String(o.orderId) === String(ao.orderId)));
   // Clean up orphan orders for this token that are not tracked by the grid
@@ -1481,7 +1522,8 @@ async function makerGridCycle({
           ? Math.round(order.amountUsd * 1e6) / 1e6
           : Number(order.amountToken.toFixed(10)),
         triggerPrice: order.price,
-        currentPrice: orderCurrentPrice
+        currentPrice: orderCurrentPrice,
+        slippagePct: order.side === "buy" ? buySlippagePct : sellSlippagePct
       });
       activeOrders.push({ orderId, side: order.side, level: order.level, placedAt: Date.now(), price: order.price });
       makerStore.log(`${token} 网格${order.side === "buy" ? "买入" : "卖出"}挂单 第${order.level}格 @ $${order.price.toFixed(4)}`, "info");
@@ -1504,7 +1546,25 @@ async function makerGridCycle({
     lossStreak = 0;
     makerStore.update({ [lossStreakKey]: lossStreak });
   }
-  const totalRealizedUsd = Number(state.realizedPnlUsd || 0) + Number(state.realizedPnlBtcUsd || 0);
+  const riskState = makerStore.read();
+  const totalRealizedUsd = Number(riskState.realizedPnlUsd || 0)
+    + Number(riskState.realizedPnlBtcUsd || 0)
+    + Number(riskState.realizedPnlCrclxUsd || 0);
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const dayStartRealizedUsd = riskState.makerDayKey === dayKey
+    ? Number(riskState.makerDayStartRealizedUsd || 0)
+    : totalRealizedUsd;
+  const dailyPnlUsd = totalRealizedUsd - dayStartRealizedUsd;
+  makerStore.update({
+    makerDayKey: dayKey,
+    makerDayStartRealizedUsd: dayStartRealizedUsd,
+    makerDailyPnlUsd: dailyPnlUsd
+  });
+  if (dailyPnlUsd <= -config.maker.dailyMaxLossUsd) {
+    makerStore.update({ running: false, stopReason: "daily_max_loss" });
+    makerStore.log(`网格日止损：今日已实现 $${dailyPnlUsd.toFixed(2)} 触发 -$${config.maker.dailyMaxLossUsd} — 暂停至下一个 UTC 交易日`, "error");
+    return;
+  }
   if (totalRealizedUsd <= -config.maker.maxLossUsd) {
     makerStore.update({
       running: false,
@@ -1518,7 +1578,24 @@ async function makerGridCycle({
 
 async function maybeAutoResumeMaker(trigger) {
   const state = makerStore.read();
-  if (state.running || !["breaker_max_loss", "market_downtrend"].includes(state.stopReason)) return;
+  if (state.running) return;
+  if (state.stopReason === "daily_max_loss") {
+    const dayKey = new Date().toISOString().slice(0, 10);
+    if (state.makerDayKey === dayKey) return;
+    const totalRealizedUsd = Number(state.realizedPnlUsd || 0)
+      + Number(state.realizedPnlBtcUsd || 0)
+      + Number(state.realizedPnlCrclxUsd || 0);
+    makerStore.update({
+      running: true,
+      stopReason: null,
+      makerDayKey: dayKey,
+      makerDayStartRealizedUsd: totalRealizedUsd,
+      makerDailyPnlUsd: 0
+    });
+    makerStore.log(`新交易日开始 — 日亏损保护已重置（${trigger}）`, "info");
+    return;
+  }
+  if (!["breaker_max_loss", "market_downtrend"].includes(state.stopReason)) return;
   if (!config.maker.breakerAutoResume) return;
   if (Date.now() < Number(state.breakerNextCheckAt || 0)) return;
   let market;
@@ -1553,12 +1630,64 @@ async function makerListOrders() {
   return payload.data?.list || [];
 }
 
-async function makerCreateOrder({ direction, amount, triggerPrice, currentPrice, fromToken, toToken }) {
+async function makerGetOrderDetail(orderId) {
+  const { payload } = await runOnchainos([
+    "strategy", "list", "--chain", "xlayer", "--order-id", String(orderId)
+  ]);
+  if (!payload?.ok) throw new Error(payload?.error || "strategy detail failed");
+  return payload.data?.list?.[0] || null;
+}
+
+async function syncActualCompletedOrders(token, trackedOrders, openTokenOrders) {
+  const openIds = new Set((openTokenOrders || []).map(order => String(order.orderId)));
+  const missing = (trackedOrders || []).filter(order => !openIds.has(String(order.orderId)));
+  let accounting = makerStore.read().actualAccounting || emptyActualAccounting();
+  const pending = new Map((accounting.pendingReceiptOrders || []).map(item => [String(item.orderId), item]));
+  for (const tracked of missing) pending.set(String(tracked.orderId), { orderId: String(tracked.orderId), token, level: tracked.level });
+  const candidates = [...pending.values()].filter(item => item.token === token);
+  if (!candidates.length) return { accounting, newFills: [] };
+
+  const newFills = [];
+  for (const tracked of candidates) {
+    const orderId = String(tracked.orderId);
+    if ((accounting.processedOrderIds || []).includes(orderId)) {
+      pending.delete(orderId);
+      continue;
+    }
+    try {
+      const detail = await makerGetOrderDetail(orderId);
+      const parsed = actualFillFromOrder(detail);
+      const fill = parsed ? { ...parsed, level: tracked.level } : null;
+      if (fill) {
+        accounting = applyActualFill(accounting, fill);
+        newFills.push(fill);
+        pending.delete(orderId);
+        const booked = accounting.fills?.[0];
+        makerStore.log(
+          `${token} 实际成交入账 ${fill.side} ${fill.units.toFixed(8)}，现金 $${fill.cashUsd.toFixed(6)}`
+            + (booked?.realizedPnlUsd == null ? "" : `，实际已实现 $${Number(booked.realizedPnlUsd).toFixed(6)}`),
+          "info"
+        );
+      } else {
+        const status = String(detail?.statusLabel || "").toLowerCase();
+        if (["cancelled", "canceled", "expired", "failed"].includes(status)) pending.delete(orderId);
+      }
+    } catch (error) {
+      makerStore.log(`${token} 实际成交回执读取失败 ${orderId.slice(-8)}：${error.message}；稍后重试`, "warn");
+    }
+  }
+  accounting.pendingReceiptOrders = [...pending.values()].slice(-300);
+  makerStore.update({ actualAccounting: accounting });
+  return { accounting, newFills };
+}
+
+async function makerCreateOrder({ direction, amount, triggerPrice, currentPrice, fromToken, toToken, slippagePct = 0.25 }) {
   const { payload } = await runOnchainos([
     "strategy", "create-limit", "--chain-id", "xlayer",
     "--from-token", fromToken, "--to-token", toToken,
     "--amount", String(amount), "--trigger-price", String(triggerPrice),
-    "--direction", direction, "--current-price", String(currentPrice)
+    "--direction", direction, "--current-price", String(currentPrice),
+    "--slippage", String(slippagePct)
   ]);
   if (!payload?.ok) throw new Error(payload?.error || JSON.stringify(payload?.data || "create-limit failed"));
   if (payload.data?.belowMinimum) throw new Error(`order below minimum (min ${payload.data.minFromAmount})`);
@@ -2316,46 +2445,53 @@ const server = http.createServer(async (request, response) => {
         const tokenTrades = allTrades.filter(t => t.token === symbol);
         const sells = tokenTrades.filter(t => t.kind === "SELL" && t.pnlUsd != null);
         const volumeUsd = tokenTrades.reduce((sum, t) => sum + Number(t.units || 0) * Number(t.price || 0) * 2, 0);
-        const winRate = sells.length
-          ? Math.round(sells.filter(t => t.pnlUsd > 0).length / sells.length * 1000) / 10
+        const actualFills = (state.actualAccounting?.fills || []).filter(fill => fill.token === symbol);
+        const actualSells = actualFills.filter(fill => fill.side === "SELL" && fill.realizedPnlUsd != null);
+        const actualVolumeUsd = actualFills.reduce((sum, fill) => sum + Number(fill.cashUsd || 0), 0);
+        const winRate = actualSells.length
+          ? Math.round(actualSells.filter(fill => fill.realizedPnlUsd > 0).length / actualSells.length * 1000) / 10
           : null;
-        const realizedUsd = Number(state[realizedKey] || 0);
+        const estimatedRealizedUsd = Number(state[realizedKey] || 0);
+        const actual = actualTokenSummary(state.actualAccounting, symbol, lastPrice);
         return {
           symbol,
-          realizedPnlUsd: Math.round(realizedUsd * 100) / 100,
-          unrealizedUsd: Math.round(unrealizedUsd * 100) / 100,
-          netUsd: Math.round((realizedUsd + unrealizedUsd) * 100) / 100,
+          realizedPnlUsd: Math.round(actual.realizedPnlUsd * 100) / 100,
+          unrealizedUsd: Math.round(actual.unrealizedPnlUsd * 100) / 100,
+          netUsd: Math.round(actual.netPnlUsd * 100) / 100,
+          estimatedRealizedPnlUsd: Math.round(estimatedRealizedUsd * 100) / 100,
+          estimatedUnrealizedUsd: Math.round(unrealizedUsd * 100) / 100,
+          accountingStartedAt: state.actualAccounting?.startedAt || null,
+          unmatchedSellUnits: actual.unmatchedSellUnits,
           positions: positions.length,
           activeOrders: (gridState?.activeOrders || []).length,
-          tradeCount: tokenTrades.length,
-          volumeUsd: Math.round(volumeUsd),
+          tradeCount: actual.fillCount,
+          estimatedTradeCount: tokenTrades.length,
+          volumeUsd: Math.round(actualVolumeUsd),
+          estimatedVolumeUsd: Math.round(volumeUsd),
           winRate
         };
       };
-      const usRealized = Number(state.realizedPnlUsd || 0);
-      const btcRealized = Number(state.realizedPnlBtcUsd || 0);
-      const crclxRealized = Number(state.realizedPnlCrclxUsd || 0);
       const crclxPnl = config.maker.crclxGrid.enabled
         ? buildTokenPnl(config.maker.crclxGrid.token, gridCrclx, "realizedPnlCrclxUsd")
         : null;
       const pnlByToken = {
         [config.maker.token]: buildTokenPnl(config.maker.token, grid, "realizedPnlUsd"),
-        ...(config.maker.extraGridToken
+        ...(config.maker.extraGridEnabled && config.maker.extraGridToken
           ? { [config.maker.extraGridToken]: buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd") }
           : {}),
         ...(crclxPnl ? { [config.maker.crclxGrid.token]: crclxPnl } : {}),
         total: {
-          realizedPnlUsd: Math.round((usRealized + btcRealized + crclxRealized) * 100) / 100,
-          unrealizedUsd: Math.round(
-            (buildTokenPnl(config.maker.token, grid, "realizedPnlUsd").unrealizedUsd
-              + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)
-              + (crclxPnl ? crclxPnl.unrealizedUsd : 0)) * 100
-          ) / 100,
-          netUsd: Math.round((usRealized + btcRealized + crclxRealized
-            + buildTokenPnl(config.maker.token, grid, "realizedPnlUsd").unrealizedUsd
-            + (config.maker.extraGridToken ? buildTokenPnl(config.maker.extraGridToken, gridBtc, "realizedPnlBtcUsd").unrealizedUsd : 0)
-            + (crclxPnl ? crclxPnl.unrealizedUsd : 0)) * 100) / 100
+          realizedPnlUsd: 0,
+          unrealizedUsd: 0,
+          netUsd: 0
         }
+      };
+      const actualRows = Object.values(pnlByToken).filter(row => row?.symbol);
+      pnlByToken.total = {
+        realizedPnlUsd: Math.round(actualRows.reduce((sum, row) => sum + Number(row.realizedPnlUsd || 0), 0) * 100) / 100,
+        unrealizedUsd: Math.round(actualRows.reduce((sum, row) => sum + Number(row.unrealizedUsd || 0), 0) * 100) / 100,
+        netUsd: Math.round(actualRows.reduce((sum, row) => sum + Number(row.netUsd || 0), 0) * 100) / 100,
+        accountingStartedAt: state.actualAccounting?.startedAt || null
       };
       return json(response, 200, {
         state,
@@ -2379,8 +2515,34 @@ const server = http.createServer(async (request, response) => {
           pauseStartUtc: config.maker.pauseStartUtc,
           pauseEndUtc: config.maker.pauseEndUtc,
           maxLossUsd: config.maker.maxLossUsd,
+          dailyMaxLossUsd: config.maker.dailyMaxLossUsd,
           lossStreakLimit: config.maker.lossStreakLimit,
-          cooldownMinutes: config.maker.cooldownMinutes
+          cooldownMinutes: config.maker.cooldownMinutes,
+          grids: {
+            [config.maker.token]: {
+              enabled: config.maker.mainEnabled,
+              levels: config.maker.gridLevels,
+              spacingBps: config.maker.gridSpacingBps,
+              profitBps: config.maker.gridProfitBps,
+              deployPct: config.maker.gridDeployPct
+            },
+            ...(config.maker.extraGridToken ? {
+              [config.maker.extraGridToken]: {
+                enabled: config.maker.extraGridEnabled,
+                levels: config.maker.extraGridLevels,
+                spacingBps: config.maker.extraGridSpacingBps,
+                profitBps: config.maker.extraGridProfitBps,
+                deployPct: config.maker.extraGridDeployPct
+              }
+            } : {}),
+            [config.maker.crclxGrid.token]: {
+              enabled: config.maker.crclxGrid.enabled,
+              levels: config.maker.crclxGrid.levels,
+              spacingBps: config.maker.crclxGrid.spacingBps,
+              profitBps: config.maker.crclxGrid.profitBps,
+              deployPct: config.maker.crclxGrid.deployPct
+            }
+          }
         },
         capabilities: {
           autonomousConfigured: config.maker.autonomousEnabled,
@@ -2392,6 +2554,11 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "GET" && url.pathname === "/api/maker/live") {
       const state = makerStore.read();
+      const actualFills = state.actualAccounting?.fills || [];
+      const actualNvda = actualTokenSummary(state.actualAccounting, config.maker.token, Number(state.grid?.lastPrice || 0));
+      const actualOkb = config.maker.extraGridToken
+        ? actualTokenSummary(state.actualAccounting, config.maker.extraGridToken, Number(state.gridBtc?.lastPrice || 0))
+        : { realizedPnlUsd: 0 };
       return json(response, 200, {
         state: {
           running: state.running,
@@ -2399,10 +2566,11 @@ const server = http.createServer(async (request, response) => {
           activeOrderId: state.activeOrderId,
           inventoryUnits: state.inventoryUnits,
           costBasisUsd: state.costBasisUsd,
-          realizedPnlUsd: state.realizedPnlUsd,
-          realizedPnlBtcUsd: state.realizedPnlBtcUsd,
-          tradeCount: (state.trades || []).length,
-          roundTrips: (state.trades || []).filter(trade => trade.kind === "SELL").length,
+          realizedPnlUsd: actualNvda.realizedPnlUsd,
+          realizedPnlBtcUsd: actualOkb.realizedPnlUsd,
+          tradeCount: actualFills.length,
+          roundTrips: actualFills.filter(fill => fill.side === "SELL" && fill.realizedPnlUsd != null).length,
+          accountingStartedAt: state.actualAccounting?.startedAt || null,
           lossStreak: state.lossStreak,
           lossStreakBtc: state.lossStreakBtc,
           cooldownUntil: state.cooldownUntil,
@@ -2440,9 +2608,18 @@ const server = http.createServer(async (request, response) => {
       const makerSells = makerTrades.filter(t => t.kind === "SELL" && t.pnlUsd != null);
       const makerVolume = makerTrades.reduce((sum, t) => sum + Number(t.units || 0) * Number(t.price || 0), 0);
       const makerWins = makerSells.filter(t => t.pnlUsd > 0).length;
-      const makerStarted = makerTrades.length ? makerTrades[makerTrades.length - 1].at : null;
-      const makerPrice = Number(maker.lastDecision?.price || onchain?.prices?.[config.maker.token] || 0);
-      const makerRealized = Number(maker.realizedPnlUsd || 0) + Number(maker.realizedPnlBtcUsd || 0);
+      const makerStarted = maker.actualAccounting?.startedAt || null;
+      const makerEstimatedRealized = Number(maker.realizedPnlUsd || 0) + Number(maker.realizedPnlBtcUsd || 0);
+      const actualFills = maker.actualAccounting?.fills || [];
+      const actualSells = actualFills.filter(fill => fill.side === "SELL" && fill.realizedPnlUsd != null);
+      const actualNvda = actualTokenSummary(maker.actualAccounting, config.maker.token, Number(maker.grid?.lastPrice || 0));
+      const actualOkb = config.maker.extraGridToken
+        ? actualTokenSummary(maker.actualAccounting, config.maker.extraGridToken, Number(maker.gridBtc?.lastPrice || 0))
+        : actualTokenSummary(null, "", 0);
+      const makerActualRealized = actualNvda.realizedPnlUsd + actualOkb.realizedPnlUsd;
+      const makerActualUnrealized = actualNvda.unrealizedPnlUsd + actualOkb.unrealizedPnlUsd;
+      const makerActualVolume = actualFills.reduce((sum, fill) => sum + Number(fill.cashUsd || 0), 0);
+      const makerActualWins = actualSells.filter(fill => fill.realizedPnlUsd > 0).length;
 
       const rwaTrades = rwa.trades || [];
       const rwaSells = rwaTrades.filter(t => t.action === "SELL" && t.cashPnlUsd != null);
@@ -2457,12 +2634,13 @@ const server = http.createServer(async (request, response) => {
           chain: "X Layer",
           status: maker.running ? "运行中" : "已停止",
           startedAt: makerStarted,
-          realizedPnlUsd: Number(makerRealized.toFixed(2)),
-          moduleCounterUsd: Number(makerRealized.toFixed(2)),
-          volumeUsd: Math.round(makerVolume),
-          tradeCount: makerTrades.length,
-          winRate: makerSells.length ? Math.round(makerWins / makerSells.length * 1000) / 10 : null,
-          inventoryUsd: Math.round(Number(maker.inventoryUnits || 0) * makerPrice * 100) / 100,
+          realizedPnlUsd: Number(makerActualRealized.toFixed(2)),
+          moduleCounterUsd: Number(makerEstimatedRealized.toFixed(2)),
+          volumeUsd: Math.round(makerActualVolume),
+          estimatedVolumeUsd: Math.round(makerVolume),
+          tradeCount: actualFills.length,
+          estimatedTradeCount: makerTrades.length,
+          winRate: actualSells.length ? Math.round(makerActualWins / actualSells.length * 1000) / 10 : null,
           strategy: "双边限价轮转 + 区间闸门 + K线熔断自动恢复",
           note: maker.regimeInfo
             ? `区间闸门: 趋势 ${Number(maker.regimeInfo.trendBps || 0).toFixed(1)}bps / 波动 ${Number(maker.regimeInfo.rangeBps || 0).toFixed(1)}bps`
@@ -2514,6 +2692,46 @@ const server = http.createServer(async (request, response) => {
 
       const walletTotalUsd = Number(onchain?.wallet?.totalValueUsd || 0);
       const baseCapitalUsd = Number(config.risk.baseCapitalUsd || 0);
+      // Module counters are strategy estimates built from detected balance
+      // deltas and grid prices. Keep a separate wallet-net-value baseline for
+      // the only authoritative forward P&L: total wallet assets.
+      let makerWalletBaselineUsd = Number(maker.walletAccountingBaselineUsd || 0);
+      let makerWalletBaselineAt = maker.walletAccountingBaselineAt || null;
+      if (!(makerWalletBaselineUsd > 0) && walletTotalUsd > 0) {
+        makerWalletBaselineUsd = walletTotalUsd;
+        makerWalletBaselineAt = new Date().toISOString();
+        makerStore.update({
+          walletAccountingBaselineUsd: makerWalletBaselineUsd,
+          walletAccountingBaselineAt: makerWalletBaselineAt
+        });
+      }
+      const makerWalletPnlUsd = makerWalletBaselineUsd > 0
+        ? walletTotalUsd - makerWalletBaselineUsd
+        : null;
+      const makerGridUnrealizedUsd = [maker.grid, maker.gridBtc]
+        .filter(Boolean)
+        .reduce((sum, gridState) => sum + (gridState.positions || []).reduce(
+          (positionSum, position) => positionSum
+            + Number(position.units || 0) * Number(gridState.lastPrice || 0)
+            - Number(position.costUsd || 0),
+          0
+        ), 0);
+      const makerInventoryUsd = [maker.grid, maker.gridBtc]
+        .filter(Boolean)
+        .reduce((sum, gridState) => sum + (gridState.positions || []).reduce(
+          (positionSum, position) => positionSum
+            + Number(position.units || 0) * Number(gridState.lastPrice || 0),
+          0
+        ), 0);
+      projects[0].inventoryUsd = Math.round(makerInventoryUsd * 100) / 100;
+      projects[0].actualNetPnlUsd = Math.round((makerActualRealized + makerActualUnrealized) * 100) / 100;
+      projects[0].estimatedNetPnlUsd = Math.round((makerEstimatedRealized + makerGridUnrealizedUsd) * 100) / 100;
+      projects[0].walletPnlSinceBaselineUsd = makerWalletPnlUsd == null
+        ? null
+        : Math.round(makerWalletPnlUsd * 100) / 100;
+      projects[0].walletBaselineUsd = Math.round(makerWalletBaselineUsd * 100) / 100;
+      projects[0].walletBaselineAt = makerWalletBaselineAt;
+      projects[0].accountingBasis = "实际盈亏仅使用订单真实支付与到账；旧模块计数仅作对照";
       // Record wallet-total history so the console can show real asset trends
       // (the only P&L the user trusts is the wallet balance itself).
       const walletHistory = store.read().walletHistory || [];
@@ -2531,6 +2749,10 @@ const server = http.createServer(async (request, response) => {
           walletChange1hUsd: first1h ? Math.round((walletTotalUsd - first1h.value) * 100) / 100 : null,
           walletChange24hUsd: first24h ? Math.round((walletTotalUsd - first24h.value) * 100) / 100 : null,
           realizedProjectsUsd: Math.round(projects.reduce((s, p) => s + Number(p.realizedPnlUsd || 0), 0) * 100) / 100,
+          estimatedProjectsUsd: Math.round(projects.reduce((s, p) => s + Number(p.realizedPnlUsd || 0), 0) * 100) / 100,
+          makerWalletPnlUsd: makerWalletPnlUsd == null ? null : Math.round(makerWalletPnlUsd * 100) / 100,
+          makerWalletBaselineUsd: Math.round(makerWalletBaselineUsd * 100) / 100,
+          makerWalletBaselineAt,
           activeProjects: projects.filter(p => p.status === "运行中").length,
           generatedAt: new Date().toISOString()
         },
