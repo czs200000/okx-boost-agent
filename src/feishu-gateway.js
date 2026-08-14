@@ -7,8 +7,12 @@
 //   FEISHU_APP_ID=<app id>
 //   FEISHU_APP_SECRET=<app secret>
 //   FEISHU_ADMIN_OPEN_ID=<open id of the owner chat> (optional but recommended)
-//   FEISHU_PUSH_HOURLY=true  -> push a maker summary every hour
+//   FEISHU_MAKER_PUSH_TIMES=08:30,16:30,23:30 -> Tokyo-time Maker summaries
 import * as lark from "@larksuiteoapi/node-sdk";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const BASE = "http://127.0.0.1:4310";
 
@@ -22,7 +26,10 @@ function loadConfig() {
     appId: process.env.FEISHU_APP_ID || "",
     appSecret: process.env.FEISHU_APP_SECRET || "",
     adminOpenId: (process.env.FEISHU_ADMIN_OPEN_ID || "").trim(),
-    pushHourly: process.env.FEISHU_PUSH_HOURLY === "true" || process.env.FEISHU_PUSH_HOURLY === "1"
+    makerPushTimes: (process.env.FEISHU_MAKER_PUSH_TIMES || "08:30,16:30,23:30")
+      .split(",")
+      .map(value => value.trim())
+      .filter(value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))
   };
 }
 
@@ -74,15 +81,64 @@ async function walletAssets() {
 }
 
 async function hackathonWatch() {
-  const fs = await import("node:fs");
-  const logPath = new URL("../data/asp-review-watch.log", import.meta.url);
-  let tail = "";
+  return aspStatus();
+}
+
+async function aspReviewStatus() {
+  const onchainos = "/Users/office/.local/bin/onchainos";
+  const env = {
+    ...process.env,
+    HTTPS_PROXY: process.env.HTTPS_PROXY || "http://127.0.0.1:1082",
+    https_proxy: process.env.https_proxy || "http://127.0.0.1:1082",
+    HTTP_PROXY: process.env.HTTP_PROXY || "http://127.0.0.1:1082",
+    http_proxy: process.env.http_proxy || "http://127.0.0.1:1082",
+    ALL_PROXY: process.env.ALL_PROXY || "http://127.0.0.1:1082",
+    all_proxy: process.env.all_proxy || "http://127.0.0.1:1082",
+    NO_PROXY: process.env.NO_PROXY || "localhost,127.0.0.1"
+  };
   try {
-    tail = fs.readFileSync(logPath, "utf8").trim().split("\n").slice(-5).join("\n");
-  } catch {
-    tail = "暂无监控日志";
+    const { stdout } = await execFileAsync(onchainos, ["agent", "get-my-agents"], { timeout: 20000, env });
+    const parsed = JSON.parse(stdout);
+    const list = parsed?.data?.list || [];
+    const agents = list[0]?.agentList || [];
+    if (!agents.length) return null;
+    const a = agents[0];
+    return {
+      agentId: a.agentId,
+      name: a.name,
+      approval: a.approvalLabel || "未知",
+      remark: a.approvalRemark || "",
+      listed: (a.statusLabel || "").toLowerCase() !== "not listed",
+      online: a.onlineStatus === 1
+    };
+  } catch (error) {
+    return { error: error.message };
   }
-  return `🎯 黑客松报名监控\n${tail || "（等待记录）"}`;
+}
+
+function mapApproval(label, remark) {
+  const l = String(label || "").toLowerCase();
+  if (l.includes("reject")) return { text: "审核被拒", note: String(remark || "").replace(/\s+/g, " ").slice(0, 120) };
+  if (l.includes("review") || l.includes("under")) return { text: "审核中", note: "" };
+  if (l.includes("approve") || l.includes("pass")) return { text: "已通过", note: "" };
+  if (l.includes("pending") || l.includes("not submitted")) return { text: "待提交", note: "" };
+  return { text: label || "未知", note: "" };
+}
+
+export async function aspStatus() {
+  const s = await aspReviewStatus();
+  if (!s) return "🎯 ASP 审核状态\n▸ 当前钱包未找到 ASP 身份";
+  if (s.error) return `🎯 ASP 审核状态\n▸ 查询失败：${s.error}`;
+  const m = mapApproval(s.approval, s.remark);
+  const lines = [
+    `🎯 ASP 审核状态`,
+    `▸ ${s.name}（#${s.agentId}）`,
+    `▸ 审核：${m.text}`,
+    `▸ 上架：${s.listed ? "已上架" : "未上架"}`,
+    `▸ 在线：${s.online ? "在线" : "离线"}`,
+    ...(m.note ? [`▸ 说明：${m.note}`] : [])
+  ];
+  return lines.join("\n");
 }
 
 async function controlMaker(action) {
@@ -121,7 +177,7 @@ async function routeCommand(text) {
   if (/钱包|资产|余额/.test(t)) return walletAssets();
   if (/okb/.test(t)) return makerStatus();
   if (/nvdax|美股/.test(t)) return makerStatus();
-  if (/黑客松|审核|报名/.test(t)) return hackathonWatch();
+  if (/黑客松|审核|报名|asp/.test(t)) return aspStatus();
   if (/启动\s*maker|开始\s*maker/.test(t)) return controlMaker("start");
   if (/停止\s*maker|暂停\s*maker/.test(t)) return controlMaker("stop");
   if (/改成|调整|修改|设置|暂停|恢复/.test(t)) return pendingChange(text);
@@ -188,34 +244,27 @@ export async function startFeishuGateway(log) {
   });
   log("飞书网关已启动（WebSocket 长连接）", "info");
 
-  if (cfg.pushHourly) {
-    setInterval(async () => {
-      try {
-        const text = await makerStatus();
-        await pushToAdmin(`⏰ 定时盈亏播报\n${text}`);
-      } catch (error) {
-        log(`飞书定时推送失败：${error.message}`, "error");
-      }
-    }, 60 * 60 * 1000);
-    log("飞书定时盈亏播报已启用（每小时）", "info");
-  }
-  // Daily recap at 12:30 Asia/Tokyo.
-  const dailyPushed = { date: "" };
+  // Fixed Maker recaps in Asia/Tokyo. One key per minute prevents duplicate
+  // sends if the event loop is delayed or the interval overlaps.
+  const pushedKeys = new Set();
   setInterval(async () => {
     try {
       const now = new Date();
       const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
       const hhmm = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(now);
-      if (hhmm === "12:30" && dailyPushed.date !== dateKey) {
-        dailyPushed.date = dateKey;
-        const text = await makerStatus();
-        await pushToAdmin(`📅 每日复盘（12:30）\n${text}`);
-        log("飞书每日复盘已推送", "info");
+      const pushKey = `${dateKey} ${hhmm}`;
+      if (cfg.makerPushTimes.includes(hhmm) && !pushedKeys.has(pushKey)) {
+        pushedKeys.add(pushKey);
+        const maker = await makerStatus();
+        const asp = await aspStatus();
+        await pushToAdmin(`⏰ 每日定时播报（${hhmm} 东京时间）\n\n${maker}\n\n${asp}`);
+        log(`飞书每日定时播报已推送（${hhmm} 东京时间）`, "info");
       }
+      for (const key of pushedKeys) if (!key.startsWith(dateKey)) pushedKeys.delete(key);
     } catch (error) {
-      log(`飞书每日复盘失败：${error.message}`, "error");
+      log(`飞书 Maker 定时盈亏推送失败：${error.message}`, "error");
     }
   }, 60 * 1000);
-  log("飞书每日复盘已启用（每天 12:30 东京时间）", "info");
+  log(`飞书每日定时播报已启用（东京时间 ${cfg.makerPushTimes.join("、")}：Maker 盈亏 + ASP 审核）`, "info");
   return { pushToAdmin };
 }
