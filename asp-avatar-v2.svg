@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="440" viewBox="0 0 440 440">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1B2F"/>
+      <stop offset="1" stop-color="#122C48"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#0E5E4C" stop-opacity="0.45"/>
+      <stop offset="0.6" stop-color="#0B1B2F" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 全出血背景：四角为直角，无圆角 -->
+  <rect width="440" height="440" fill="url(#bg)"/>
+  <rect width="440" height="440" fill="url(#glow)"/>
+
+  <!-- 网格纹理（网格做市意象） -->
+  <g stroke="#1E4A75" stroke-width="1" opacity="0.30">
+    <path d="M0 80H440 M0 160H440 M0 240H440 M0 320H440 M0 400H440"/>
+    <path d="M80 0V440 M160 0V440 M240 0V440 M320 0V440 M400 0V440"/>
+  </g>
+  <g stroke="#1E4A75" stroke-width="1" opacity="0.14">
+    <path d="M0 40H440 M0 120H440 M0 200H440 M0 280H440 M0 360H440"/>
+    <path d="M40 0V440 M120 0V440 M200 0V440 M280 0V440 M360 0V440"/>
+  </g>
+
+  <!-- K 线（网格低买高卖意象） -->
+  <g stroke-width="3" stroke-linecap="round">
+    <!-- 第1根：阳线 -->
+    <path d="M130 300V246" stroke="#34D399"/>
+    <rect x="116" y="256" width="28" height="34" rx="3" fill="#34D399"/>
+    <!-- 第2根：阳线 -->
+    <path d="M170 280V226" stroke="#34D399"/>
+    <rect x="156" y="236" width="28" height="34" rx="3" fill="#34D399"/>
+    <!-- 第3根：阴线（小幅回调） -->
+    <path d="M210 282V222" stroke="#F87171"/>
+    <rect x="196" y="232" width="28" height="36" rx="3" fill="#F87171"/>
+    <!-- 第4根：阳线 -->
+    <path d="M250 256V202" stroke="#34D399"/>
+    <rect x="236" y="212" width="28" height="34" rx="3" fill="#34D399"/>
+    <!-- 第5根：阳线 -->
+    <path d="M290 232V178" stroke="#34D399"/>
+    <rect x="276" y="188" width="28" height="34" rx="3" fill="#34D399"/>
+    <!-- 第6根：阳线 -->
+    <path d="M330 210V156" stroke="#34D399"/>
+    <rect x="316" y="166" width="28" height="34" rx="3" fill="#34D399"/>
+  </g>
+
+  <!-- 上升趋势线 -->
+  <g stroke="#B5F51C" stroke-width="3" stroke-linecap="round" fill="none">
+    <path d="M112 312L340 168" stroke-dasharray="9 7"/>
+  </g>
+  <circle cx="342" cy="166" r="6" fill="#B5F51C"/>
+
+  <!-- 底部标识 -->
+  <rect x="118" y="350" width="204" height="54" rx="27" fill="#0D2038" stroke="#2BD98B" stroke-width="2"/>
+  <text x="220" y="385" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">OKB GRID</text>
+</svg>
