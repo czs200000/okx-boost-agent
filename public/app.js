@@ -554,6 +554,6 @@ refreshMaker();
 renderHackathon();
 refreshFinance();
 setInterval(refreshMakerLive, 4000);
-setInterval(refreshMaker, 15000);
+setInterval(refreshMaker, 5000);
 setInterval(renderHackathon, 30000);
 setInterval(refreshFinance, 30000);
