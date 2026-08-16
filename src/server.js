@@ -1330,11 +1330,14 @@ async function makerGridCycle({
 
   // Rebuild unfilled levels when an operator changes the configured shape.
   // Existing inventory keeps its cost basis, but its target is recalculated
-  // from that cost whenever the configured profit requirement changes.
+  // from that cost whenever the configured profit requirement changes. A
+  // deploy-% change also rebuilds level sizes so the new allocation takes
+  // effect without manual grid resets.
   if (grid?.levels?.length && (
     Number(grid.count) !== Number(count)
     || Number(grid.spacingBps) !== Number(spacingBps)
     || Number(grid.profitBps) !== Number(profitBps)
+    || Number(grid.deployPct) !== Number(deployPct)
   )) {
     const rebuilt = allocateLevelUsd(buildGrid({
       mid: price,
@@ -1344,6 +1347,7 @@ async function makerGridCycle({
     }), usdtBalanceUsd * deployPct / 100, config.maker.gridLadderMax);
     grid = {
       ...rebuilt,
+      deployPct,
       positions: (grid.positions || []).map(position => {
         const unitCost = Number(position.units || 0) > 0 ? Number(position.costUsd || 0) / Number(position.units) : 0;
         return { ...position, sellPrice: unitCost * (1 + Number(profitBps) / 10000) };
@@ -1354,7 +1358,7 @@ async function makerGridCycle({
       lastPrice: price
     };
     makerStore.update({ [gridKey]: grid });
-    makerStore.log(`${token} 网格参数已应用：${count} 格 × ${spacingBps}bps / +${profitBps}bps，保留 ${(grid.positions || []).length} 格原持仓`, "info");
+    makerStore.log(`${token} 网格参数已应用：${count} 格 × ${spacingBps}bps / +${profitBps}bps / 部署${deployPct}%，保留 ${(grid.positions || []).length} 格原持仓`, "info");
   }
 
   // 1. Initialize the grid on first run / after recovery.
@@ -1365,7 +1369,7 @@ async function makerGridCycle({
       profitBps,
       count
     }), usdtBalanceUsd * deployPct / 100, config.maker.gridLadderMax);
-    grid = { ...built, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0, lastPrice: price };
+    grid = { ...built, deployPct, positions: [], activeOrders: [], initializedAt: Date.now(), lastAiTuneAt: 0, lastPrice: price };
     makerStore.update({ [gridKey]: grid });
     makerStore.log(`${token} 网格初始化：${count} 格 × ${spacingBps}bps 间距 / +${profitBps}bps 止盈，部署 $${built.levels.reduce((s, l) => s + l.buyUsd, 0).toFixed(0)}`, "info");
   }
@@ -1505,15 +1509,15 @@ async function makerGridCycle({
     for (const ao of (grid.activeOrders || []).filter(o => o.side === "buy")) {
       try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
     }
-    const deployedUsd = grid.levels.reduce((sum, l) => sum + l.buyUsd, 0);
     const rebuilt = allocateLevelUsd(buildGrid({
       mid: price,
       spacingBps: grid.spacingBps,
       profitBps,
       count
-    }), deployedUsd, config.maker.gridLadderMax);
+    }), usdtBalanceUsd * deployPct / 100, config.maker.gridLadderMax);
     grid = {
       ...grid,
+      deployPct,
       mid: price,
       levels: rebuilt.levels,
       activeOrders: (grid.activeOrders || []).filter(o => o.side === "sell")
@@ -3141,6 +3145,12 @@ server.listen(config.port, "127.0.0.1", () => {
   }
   if (config.maker.enabled) {
     const makerState = makerStore.read();
+    // Flow allocation disabled -> drop any stale volume-based override so the
+    // configured fixed deploy % applies and the UI shows it.
+    if (!config.maker.flowAllocEnabled && makerState.deployOverride) {
+      makerStore.update({ deployOverride: null, flowAllocAt: null });
+      makerStore.log("资金流自动调仓已停用，清除旧的成交量分配覆盖，使用固定部署比例", "info");
+    }
     if (config.maker.autonomousEnabled && (makerState.attributionVerified || store.read().attributionVerified)) {
       makerStore.update({ running: true });
       makerStore.log(`Maker rotation enabled — ${config.maker.token} limit-order market making`);
