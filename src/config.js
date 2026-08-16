@@ -210,6 +210,20 @@ export const config = Object.freeze({
       gasUsd: 0,
       ladderMax: number("MAKER_GRID_POOL4_LADDER_MAX", 2)
     },
+    okb2Grid: {
+      enabled: bool("MAKER_GRID_OKB2_ENABLED", false),
+      token: process.env.MAKER_GRID_OKB2_TOKEN || "OKB",
+      address: process.env.MAKER_GRID_OKB2_ADDRESS || "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      deployPct: number("MAKER_GRID_OKB2_DEPLOY_PCT", 15),
+      levels: number("MAKER_GRID_OKB2_LEVELS", 8),
+      spacingBps: number("MAKER_GRID_OKB2_SPACING_BPS", 30),
+      profitBps: number("MAKER_GRID_OKB2_PROFIT_BPS", 100),
+      feeRate: number("MAKER_GRID_OKB2_FEE_RATE", 0.0008),
+      gasUsd: number("MAKER_GRID_OKB2_GAS_USD", 0.01),
+      buySlippagePct: number("MAKER_GRID_OKB2_BUY_SLIPPAGE_PCT", 0.30),
+      sellSlippagePct: number("MAKER_GRID_OKB2_SELL_SLIPPAGE_PCT", 0.20),
+      ladderMax: number("MAKER_GRID_OKB2_LADDER_MAX", 2)
+    },
     gridOrderTtlMs: number("MAKER_GRID_ORDER_TTL_MS", 300000),
     gridAiTuning: bool("MAKER_GRID_AI_TUNING", true),
     gridAiIntervalMs: number("MAKER_GRID_AI_INTERVAL_MS", 3600000),

@@ -1295,15 +1295,28 @@ async function makerGridCycle({
   dynamicArming = config.maker.poolDynamicArming,
   midOverride = null,
   aiTuning = true,
-  feeRate = gridKey === "grid" ? config.maker.gridFeeRate : gridKey === "gridBtc" ? config.maker.extraGridFeeRate : config.maker.crclxGrid.feeRate,
-  gasUsd = gridKey === "grid" ? config.maker.gridGasUsd : gridKey === "gridBtc" ? config.maker.extraGridGasUsd : config.maker.crclxGrid.gasUsd,
-  buySlippagePct = gridKey === "grid" ? config.maker.gridBuySlippagePct : config.maker.extraGridBuySlippagePct,
-  sellSlippagePct = gridKey === "grid" ? config.maker.gridSellSlippagePct : config.maker.extraGridSellSlippagePct
+  feeRate = gridKey === "grid" ? config.maker.gridFeeRate
+    : gridKey === "gridBtc" ? config.maker.extraGridFeeRate
+    : gridKey === "gridOkb2" ? config.maker.okb2Grid.feeRate
+    : config.maker.crclxGrid.feeRate,
+  gasUsd = gridKey === "grid" ? config.maker.gridGasUsd
+    : gridKey === "gridBtc" ? config.maker.extraGridGasUsd
+    : gridKey === "gridOkb2" ? config.maker.okb2Grid.gasUsd
+    : config.maker.crclxGrid.gasUsd,
+  buySlippagePct = gridKey === "grid" ? config.maker.gridBuySlippagePct
+    : gridKey === "gridBtc" ? config.maker.extraGridBuySlippagePct
+    : gridKey === "gridOkb2" ? config.maker.okb2Grid.buySlippagePct
+    : config.maker.extraGridBuySlippagePct,
+  sellSlippagePct = gridKey === "grid" ? config.maker.gridSellSlippagePct
+    : gridKey === "gridBtc" ? config.maker.extraGridSellSlippagePct
+    : gridKey === "gridOkb2" ? config.maker.okb2Grid.sellSlippagePct
+    : config.maker.extraGridSellSlippagePct
 }) {
   const keyMap = {
     grid: { realized: "realizedPnlUsd", streak: "lossStreak" },
     gridBtc: { realized: "realizedPnlBtcUsd", streak: "lossStreakBtc" },
-    gridCrclx: { realized: "realizedPnlCrclxUsd", streak: "lossStreakCrclx" }
+    gridCrclx: { realized: "realizedPnlCrclxUsd", streak: "lossStreakCrclx" },
+    gridOkb2: { realized: "realizedPnlOkb2Usd", streak: "lossStreakOkb2" }
   };
   const realizedKey = (keyMap[gridKey] || keyMap.grid).realized;
   const lossStreakKey = (keyMap[gridKey] || keyMap.grid).streak;
@@ -1592,7 +1605,8 @@ async function makerGridCycle({
   const mainDeployPct = config.maker.mainEnabled ? config.maker.gridDeployPct : 0;
   const extraDeployPct = config.maker.extraGridEnabled ? config.maker.extraGridDeployPct : 0;
   const pool4DeployPct = config.maker.pool4Grid.enabled ? config.maker.pool4Grid.deployPct : 0;
-  const deployShare = deployPct / (mainDeployPct + extraDeployPct + crclxDeployPct + pool4DeployPct);
+  const okb2DeployPct = config.maker.okb2Grid.enabled ? config.maker.okb2Grid.deployPct : 0;
+  const deployShare = deployPct / (mainDeployPct + extraDeployPct + crclxDeployPct + pool4DeployPct + okb2DeployPct);
   const budgetUsd = Math.max(0, usdtBalanceUsd * (config.maker.gridBudgetPct / 100) * deployShare);
   const activeBuyLevels = new Set((activeOrders || []).filter(o => o.side === "buy").map(o => o.level));
   let thisBuyNotional = grid.levels
@@ -1654,7 +1668,8 @@ async function makerGridCycle({
   const riskState = makerStore.read();
   const totalRealizedUsd = Number(riskState.realizedPnlUsd || 0)
     + Number(riskState.realizedPnlBtcUsd || 0)
-    + Number(riskState.realizedPnlCrclxUsd || 0);
+    + Number(riskState.realizedPnlCrclxUsd || 0)
+    + Number(riskState.realizedPnlOkb2Usd || 0);
   const dayKey = new Date().toISOString().slice(0, 10);
   const dayStartRealizedUsd = riskState.makerDayKey === dayKey
     ? Number(riskState.makerDayStartRealizedUsd || 0)
@@ -1689,7 +1704,8 @@ async function maybeAutoResumeMaker(trigger) {
     if (state.makerDayKey === dayKey) return;
     const totalRealizedUsd = Number(state.realizedPnlUsd || 0)
       + Number(state.realizedPnlBtcUsd || 0)
-      + Number(state.realizedPnlCrclxUsd || 0);
+      + Number(state.realizedPnlCrclxUsd || 0)
+      + Number(state.realizedPnlOkb2Usd || 0);
     makerStore.update({
       running: true,
       stopReason: null,
@@ -1716,8 +1732,10 @@ async function maybeAutoResumeMaker(trigger) {
       running: true,
       realizedPnlUsd: 0,
       realizedPnlBtcUsd: 0,
+      realizedPnlOkb2Usd: 0,
       lossStreak: 0,
       lossStreakBtc: 0,
+      lossStreakOkb2: 0,
       cooldownUntil: 0,
       stopReason: null,
       breakerNextCheckAt: 0
@@ -1923,6 +1941,7 @@ async function makerCycle(trigger = "timer") {
     let extraDeployPct = config.maker.extraGridDeployPct;
     let crclxDeployPct = config.maker.crclxGrid.deployPct;
     let pool4DeployPct = config.maker.pool4Grid.deployPct;
+    const okb2DeployPct = config.maker.okb2Grid.enabled ? config.maker.okb2Grid.deployPct : 0;
     if (config.maker.flowAllocEnabled && config.maker.crclxGrid.enabled) {
       const now = Date.now();
       if (!state.flowAllocAt || now - Number(state.flowAllocAt) >= config.maker.flowAllocIntervalMs) {
@@ -2125,14 +2144,18 @@ async function makerCycle(trigger = "timer") {
                   && String(a.symbol || "").toUpperCase() === String(config.maker.extraGridToken).toUpperCase())
               : undefined);
           let extraUnits = Number(extraAsset?.balance || 0);
+          const okb2ExpectedUnits = gridTotals((makerStore.read().gridOkb2 || {}).positions || []).units;
           // Native OKB doubles as the gas token: never treat the whole balance
           // as sellable inventory, and use the authoritative balance source.
+          // The second OKB grid (gridOkb2) has its own tracked positions, so
+          // its expected units are reserved here to keep balance-delta
+          // attribution unambiguous between the two OKB grids.
           if (extraAddr === NATIVE_TOKEN_ADDRESS.toLowerCase()) {
             try {
-              extraUnits = Math.max(0, await fetchNativeTokenBalance(wallet.evmAddress) - config.maker.extraGridGasReserve);
+              extraUnits = Math.max(0, await fetchNativeTokenBalance(wallet.evmAddress) - config.maker.extraGridGasReserve - okb2ExpectedUnits);
             } catch (error) {
-              extraUnits = Math.max(0, extraUnits - config.maker.extraGridGasReserve);
-              makerStore.log(`OKB 余额接口失败，按钱包余额扣除 gas 储备：${error.message}`, "warn");
+              extraUnits = Math.max(0, extraUnits - config.maker.extraGridGasReserve - okb2ExpectedUnits);
+              makerStore.log(`OKB 余额接口失败，按钱包余额扣除 gas 储备与新组持仓：${error.message}`, "warn");
             }
           }
           if (extraPrice > 0) {
@@ -2155,6 +2178,55 @@ async function makerCycle(trigger = "timer") {
           }
         } catch (error) {
           makerStore.log(`BTC 网格异常：${error.message}`, "warn");
+        }
+      }
+      // Second OKB grid (gridOkb2): independent 8-level set anchored at the
+      // current price, while the original OKB grid keeps holding its filled
+      // levels until their take-profit prices are reached.
+      if (config.maker.okb2Grid.enabled && config.maker.okb2Grid.address) {
+        try {
+          const okb2Price = await fetchTokenPrice(config.maker.okb2Grid.address);
+          const okb2Addr = String(config.maker.okb2Grid.address || "").toLowerCase();
+          const okb2Asset = (snapshot.wallet.assets || [])
+            .find(a => String(a.tokenAddress || "").toLowerCase() === okb2Addr)
+            || (okb2Addr === NATIVE_TOKEN_ADDRESS.toLowerCase()
+              ? (snapshot.wallet.assets || []).find(a => !a.tokenAddress
+                  && String(a.symbol || "").toUpperCase() === String(config.maker.okb2Grid.token).toUpperCase())
+              : undefined);
+          let okb2Units = Number(okb2Asset?.balance || 0);
+          const gridBtcExpectedUnits = gridTotals((makerStore.read().gridBtc || {}).positions || []).units;
+          if (okb2Addr === NATIVE_TOKEN_ADDRESS.toLowerCase()) {
+            try {
+              okb2Units = Math.max(0, await fetchNativeTokenBalance(wallet.evmAddress) - config.maker.extraGridGasReserve - gridBtcExpectedUnits);
+            } catch (error) {
+              okb2Units = Math.max(0, okb2Units - config.maker.extraGridGasReserve - gridBtcExpectedUnits);
+              makerStore.log(`OKB 新组余额接口失败，按钱包余额扣除 gas 储备与旧组持仓：${error.message}`, "warn");
+            }
+          }
+          if (okb2Price > 0) {
+            await makerGridCycle({
+              wallet,
+              snapshot,
+              price: okb2Price,
+              usdtBalanceUsd,
+              inventoryUnits: okb2Units,
+              buysPaused: cooldownBlock || regimePaused || downtrendPaused || multiTfPaused,
+              token: config.maker.okb2Grid.token,
+              tokenAddress: config.maker.okb2Grid.address,
+              gridKey: "gridOkb2",
+              deployPct: okb2DeployPct,
+              count: config.maker.okb2Grid.levels,
+              spacingBps: config.maker.okb2Grid.spacingBps,
+              profitBps: config.maker.okb2Grid.profitBps,
+              feeRate: config.maker.okb2Grid.feeRate,
+              gasUsd: config.maker.okb2Grid.gasUsd,
+              buySlippagePct: config.maker.okb2Grid.buySlippagePct,
+              sellSlippagePct: config.maker.okb2Grid.sellSlippagePct,
+              aiTuning: false
+            });
+          }
+        } catch (error) {
+          makerStore.log(`OKB 新组网格异常：${error.message}`, "warn");
         }
       }
       // Optional third grid (CRCLx xStock) — independent module, off by default.
@@ -2699,6 +2771,17 @@ const server = http.createServer(async (request, response) => {
         }
       };
       const actualRows = Object.values(pnlByToken).filter(row => row?.symbol);
+      // Fold the second OKB grid into the OKB row (positions/orders/estimate).
+      // Actual realized/unrealized are already token-level via receipt accounting.
+      const okbRow = pnlByToken[config.maker.extraGridToken];
+      if (okbRow && config.maker.okb2Grid.enabled) {
+        const okb2Grid = state.gridOkb2 || {};
+        okbRow.positions += (okb2Grid.positions || []).length;
+        okbRow.activeOrders += (okb2Grid.activeOrders || []).length;
+        okbRow.estimatedRealizedPnlUsd = Math.round(
+          (Number(okbRow.estimatedRealizedPnlUsd) + Number(state.realizedPnlOkb2Usd || 0)) * 100
+        ) / 100;
+      }
       pnlByToken.total = {
         realizedPnlUsd: Math.round(actualRows.reduce((sum, row) => sum + Number(row.realizedPnlUsd || 0), 0) * 100) / 100,
         unrealizedUsd: Math.round(actualRows.reduce((sum, row) => sum + Number(row.unrealizedUsd || 0), 0) * 100) / 100,
@@ -2760,6 +2843,13 @@ const server = http.createServer(async (request, response) => {
               spacingBps: config.maker.pool4Grid.spacingBps,
               profitBps: config.maker.pool4Grid.profitBps,
               deployPct: config.maker.pool4Grid.deployPct
+            },
+            [config.maker.okb2Grid.token + "·新组"]: {
+              enabled: config.maker.okb2Grid.enabled,
+              levels: config.maker.okb2Grid.levels,
+              spacingBps: config.maker.okb2Grid.spacingBps,
+              profitBps: config.maker.okb2Grid.profitBps,
+              deployPct: config.maker.okb2Grid.deployPct
             }
           }
         },
@@ -2828,7 +2918,9 @@ const server = http.createServer(async (request, response) => {
       const makerVolume = makerTrades.reduce((sum, t) => sum + Number(t.units || 0) * Number(t.price || 0), 0);
       const makerWins = makerSells.filter(t => t.pnlUsd > 0).length;
       const makerStarted = maker.actualAccounting?.startedAt || null;
-      const makerEstimatedRealized = Number(maker.realizedPnlUsd || 0) + Number(maker.realizedPnlBtcUsd || 0);
+      const makerEstimatedRealized = Number(maker.realizedPnlUsd || 0)
+        + Number(maker.realizedPnlBtcUsd || 0)
+        + Number(maker.realizedPnlOkb2Usd || 0);
       const actualFills = maker.actualAccounting?.fills || [];
       const actualSells = actualFills.filter(fill => fill.side === "SELL" && fill.realizedPnlUsd != null);
       const actualNvda = actualTokenSummary(maker.actualAccounting, config.maker.token, Number(maker.grid?.lastPrice || 0));

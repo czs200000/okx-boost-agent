@@ -234,13 +234,14 @@ function renderHackathon() {
   node.className = days <= 1 ? "pill warn" : "pill";
 }
 
-const MAKER_POOL = ["NVDAx", "OKB", "CRCLx", "SPCXx"];
-const MAKER_POOL_ALLOC_KEY = { NVDAx: "main", OKB: "extra", CRCLx: "crclx", SPCXx: "pool4" };
-const MAKER_POOL_GAS = { NVDAx: "0 Gas", OKB: "0.08% 服务费 + Gas", CRCLx: "0 Gas", SPCXx: "0 Gas" };
+const MAKER_POOL = ["NVDAx", "OKB", "CRCLx", "SPCXx", "OKB·新组"];
+const MAKER_POOL_ALLOC_KEY = { NVDAx: "main", OKB: "extra", CRCLx: "crclx", SPCXx: "pool4", "OKB·新组": null };
+const MAKER_POOL_GAS = { NVDAx: "0 Gas", OKB: "0.08% 服务费 + Gas", CRCLx: "0 Gas", SPCXx: "0 Gas", "OKB·新组": "0.08% 服务费 + Gas" };
 let makerDailyStopUsd = 50;
 
 function makerGridFor(state, token) {
   if (token === "OKB") return state.gridBtc;
+  if (token === "OKB·新组") return state.gridOkb2;
   if (token === "CRCLx") return state.gridCrclx;
   if (token === "SPCXx") return state.gridPool4;
   return state.grid;
@@ -315,9 +316,10 @@ function renderMakerPool(payload) {
   const cfg = maker.grids || {};
   const maxLevels = Math.max(...MAKER_POOL.map(t => cfg[t]?.levels || 8));
   const cards = MAKER_POOL.map(token => {
+    const isOkb2 = token === "OKB·新组";
     const grid = makerGridFor(state, token);
     const c = cfg[token] || {};
-    const pnl = pnlByToken?.[token] || {};
+    const pnl = isOkb2 ? {} : (pnlByToken?.[token] || {});
     const price = grid?.mid || onchain?.prices?.[token] || makerWalletPrice(onchain, token);
     const positions = grid?.positions || [];
     const orders = grid?.activeOrders || [];
@@ -335,15 +337,15 @@ function renderMakerPool(payload) {
         <h4>${token}</h4>
         <span class="pill ${c.enabled ? "" : "warn"}">${c.enabled ? "运行" : "停"}</span>
       </div>
-      <div class="pool-gas ${token === "OKB" ? "has-fee" : ""}">${MAKER_POOL_GAS[token]} · ${c.levels || 8}格/${c.spacingBps || 30}bps/+${c.profitBps || 100}bps · 部署 ${allocPct.toFixed(0)}%</div>
+      <div class="pool-gas ${token === "OKB" || isOkb2 ? "has-fee" : ""}">${MAKER_POOL_GAS[token]} · ${c.levels || 8}格/${c.spacingBps || 30}bps/+${c.profitBps || 100}bps · 部署 ${allocPct.toFixed(0)}%</div>
       <div class="pool-price"><strong>${price ? `$${Number(price).toFixed(4)}` : "—"}</strong><small>2→${c.levels || 8} 档动态</small></div>
       <div class="pool-meta">持仓 ${positions.length} 仓 · ${tokenAmount(posUnits)} 枚 · ${money(posCost)}</div>
       <div class="pool-rows">
         <div class="pnl-row"><span>挂单</span><b title="${escapeHtml(orderDetail)}">买 ${buys.length} · 卖 ${sells.length}</b></div>
-        <div class="pnl-row"><span>实际已实现</span><b class="${pnlClass(pnl.realizedPnlUsd)}">${money(pnl.realizedPnlUsd)}</b></div>
-        <div class="pnl-row"><span>持仓浮盈亏</span><b class="${pnlClass(pnl.unrealizedUsd)}">${money(pnl.unrealizedUsd)}</b></div>
-        <div class="pnl-row"><span>合计净值</span><b class="${pnlClass(pnl.netUsd)}">${money(pnl.netUsd)}</b></div>
-        <div class="pnl-row"><span>交易量 · 胜率</span><b>${money(pnl.volumeUsd)} · ${pnl.winRate == null ? "—" : `${pnl.winRate}%`}</b></div>
+        <div class="pnl-row"><span>实际已实现</span><b>${isOkb2 ? "并入 OKB" : `<span class="${pnlClass(pnl.realizedPnlUsd)}">${money(pnl.realizedPnlUsd)}</span>`}</b></div>
+        <div class="pnl-row"><span>持仓浮盈亏</span><b>${isOkb2 ? "—" : `<span class="${pnlClass(pnl.unrealizedUsd)}">${money(pnl.unrealizedUsd)}</span>`}</b></div>
+        <div class="pnl-row"><span>合计净值</span><b>${isOkb2 ? "并入 OKB" : `<span class="${pnlClass(pnl.netUsd)}">${money(pnl.netUsd)}</span>`}</b></div>
+        <div class="pnl-row"><span>交易量 · 胜率</span><b>${isOkb2 ? "并入 OKB" : `${money(pnl.volumeUsd)} · ${pnl.winRate == null ? "—" : `${pnl.winRate}%`}`}</b></div>
       </div>
     </div>`;
   });
@@ -355,7 +357,7 @@ function renderMakerPool(payload) {
   const est = Object.values(pnlByToken || {}).reduce((sum, r) => sum + Number(r.estimatedRealizedPnlUsd || 0), 0);
   cards.push(`<div class="pnl-token pool-card pool-total">
     <div class="pool-head"><h4>汇总</h4><span class="pill">POOL</span></div>
-    <div class="pool-gas">4 币 · ${maxLevels} 档 · 30bps · 0 Gas（OKB 除外）</div>
+    <div class="pool-gas">4 币 + OKB 新组 · ${maxLevels} 档 · 30bps · 0 Gas（OKB 除外）</div>
     <div class="pool-price"><strong class="${pnlClass(total.netUsd)}">${money(total.netUsd)}</strong><small>实际成交净值</small></div>
     <div class="pool-meta">实际已实现 ${money(total.realizedPnlUsd)} · 浮盈亏 ${money(total.unrealizedUsd)}</div>
     <div class="pool-rows">
