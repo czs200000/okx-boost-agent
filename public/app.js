@@ -262,6 +262,7 @@ function renderMaker(payload) {
   el("makerStrategyDesc").textContent = `${MAKER_POOL.join(" · ")}：基础 2 档起，吃格后自动加至 ${maxLevels} 档；30bps 间距，止盈 +75/+100bps，资金按 24h 链上量自动分配。`;
   el("makerDailyStop").textContent = money(makerDailyStopUsd);
   el("makerPauseLabel").textContent = `维护窗口 ${maker.pauseStartUtc}–${maker.pauseEndUtc} UTC · 动态加档 2→${maxLevels}`;
+  el("makerUpdatedAt").textContent = `最后更新 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
   el("makerGridParams").textContent = Object.entries(cfg).map(([tok, g]) => {
     const s = g.enabled ? "运行" : "停";
     return `${tok}: ${g.levels}格/${g.spacingBps}bps/+${g.profitBps}bps/${g.deployPct}%(${s})`;
@@ -391,6 +392,7 @@ async function refreshMakerLive() {
     const payload = await api("/api/maker/live");
     const state = payload.state;
     const inCooldown = state.cooldownUntil && Date.now() < new Date(state.cooldownUntil).getTime();
+    el("makerUpdatedAt").textContent = `最后更新 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
     el("makerCircuit").textContent = inCooldown ? "冷却中" : state.running ? "运行中" : "已停止";
     const circuitBits = [`每日止损 ${money(makerDailyStopUsd)}`];
     if (inCooldown) circuitBits.push(`冷却至 ${new Date(state.cooldownUntil).toLocaleTimeString()}`);

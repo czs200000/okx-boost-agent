@@ -150,6 +150,7 @@ h3 { font-size: 19px; letter-spacing: -.02em; }
 .pnl-total { border-color: #3a4631; }
 .pnl-total h4 { color: var(--amber); }
 .pool-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.pool-updated { color: var(--muted); font-weight: 600; }
 .pool-card { display: flex; flex-direction: column; gap: 8px; }
 .pool-card.pool-total { border-color: #3a4631; }
 .pool-total .pool-head h4 { color: var(--amber); }
