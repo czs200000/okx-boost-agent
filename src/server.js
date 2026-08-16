@@ -1488,19 +1488,26 @@ async function makerGridCycle({
     positions = grid.positions;
   }
 
-  // Re-anchor the grid to the current price when flat (no inventory), so the
-  // buy levels track the market instead of being stuck at a stale anchor.
-  // Old resting buy orders are cancelled; the order-sync step re-places them
-  // at the new levels.
-  const flat = positions.length === 0;
-  if (flat && Math.abs(price / grid.mid - 1) > config.maker.gridReanchorBps / 10000) {
+  // Re-anchor the grid to the current price so buy levels track the market
+  // instead of being stuck at a stale or biased anchor. Sell targets stay
+  // tied to each position's cost (cost x (1+profit)), so re-anchoring never
+  // risks a loss; with inventory we only recenter on a large deviation.
+  const reanchorBps = config.maker.gridReanchorBps;
+  const midDeviationBps = price > 0 && grid.mid > 0 ? Math.abs(price / grid.mid - 1) * 10000 : 0;
+  const firstLevel = grid.levels?.[0];
+  const expectedL1 = price * (1 - spacingBps / 10000);
+  const levelBiasBps = firstLevel?.buyPrice && expectedL1 > 0
+    ? Math.abs(expectedL1 / firstLevel.buyPrice - 1) * 10000
+    : 0;
+  const needsReanchor = midDeviationBps > reanchorBps || levelBiasBps > reanchorBps;
+  if (needsReanchor && (positions.length === 0 || midDeviationBps > reanchorBps * 5)) {
     const oldMid = grid.mid;
     for (const ao of (grid.activeOrders || []).filter(o => o.side === "buy")) {
       try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
     }
     const deployedUsd = grid.levels.reduce((sum, l) => sum + l.buyUsd, 0);
     const rebuilt = allocateLevelUsd(buildGrid({
-      mid: midOverride ?? price,
+      mid: price,
       spacingBps: grid.spacingBps,
       profitBps,
       count
@@ -1512,7 +1519,7 @@ async function makerGridCycle({
       activeOrders: (grid.activeOrders || []).filter(o => o.side === "sell")
     };
     makerStore.update({ [gridKey]: grid });
-    makerStore.log(`${token} 网格锚点跟随：mid $${price.toFixed(2)}（原 $${oldMid.toFixed(2)}）`, "info");
+    makerStore.log(`${token} 网格锚点跟随：mid $${price.toFixed(2)}（原 $${oldMid.toFixed(2)}，买档偏差 ${levelBiasBps.toFixed(0)}bps）`, "info");
   }
 
   // 3. Hourly AI / volatility spacing tuning; rebuild unfilled buy levels.
