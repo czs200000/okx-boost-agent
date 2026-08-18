@@ -1295,6 +1295,7 @@ async function makerGridCycle({
   dynamicArming = config.maker.poolDynamicArming,
   midOverride = null,
   aiTuning = true,
+  holdOnly = false,
   feeRate = gridKey === "grid" ? config.maker.gridFeeRate
     : gridKey === "gridBtc" ? config.maker.extraGridFeeRate
     : gridKey === "gridOkb2" ? config.maker.okb2Grid.feeRate
@@ -1388,24 +1389,29 @@ async function makerGridCycle({
   const delta = inventoryUnits - expectedUnits;
   if (Math.abs(delta) > 1e-9) {
     if (delta > 0) {
-      const { fills } = attributeBuys(grid.levels, positions, delta);
-      for (const fill of fills) {
-        const level = grid.levels.find(l => l.level === fill.level);
-        if (!level) continue;
-        positions.push({
-          level: fill.level, units: fill.units, price: fill.price,
-          sellPrice: level.sellPrice, costUsd: fill.units * fill.price * (1 + feeRate),
-          filledAt: new Date().toISOString(), filledAtMs: Date.now(), estimatedFromBalance: true
+      if (holdOnly) {
+        // Hold-only grids never open new positions from balance deltas.
+        makerStore.update({ [gridKey]: { ...grid, lastPrice: price } });
+      } else {
+        const { fills } = attributeBuys(grid.levels, positions, delta);
+        for (const fill of fills) {
+          const level = grid.levels.find(l => l.level === fill.level);
+          if (!level) continue;
+          positions.push({
+            level: fill.level, units: fill.units, price: fill.price,
+            sellPrice: level.sellPrice, costUsd: fill.units * fill.price * (1 + feeRate),
+            filledAt: new Date().toISOString(), filledAtMs: Date.now(), estimatedFromBalance: true
+          });
+          makerStore.log(`${token} 网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
+        }
+        makerStore.update({
+          [gridKey]: { ...grid, positions, lastPrice: price },
+          trades: [
+            ...fills.map(f => ({ at: new Date().toISOString(), kind: "BUY", units: f.units, price: f.price, pnlUsd: null, token })),
+            ...(makerStore.read().trades || [])
+          ].slice(0, 500)
         });
-        makerStore.log(`${token} 网格买入 第${fill.level}格 ${fill.units.toFixed(6)} @ $${fill.price.toFixed(4)}`, "info");
       }
-      makerStore.update({
-        [gridKey]: { ...grid, positions, lastPrice: price },
-        trades: [
-          ...fills.map(f => ({ at: new Date().toISOString(), kind: "BUY", units: f.units, price: f.price, pnlUsd: null, token })),
-          ...(makerStore.read().trades || [])
-        ].slice(0, 500)
-      });
     } else {
       const { sells } = attributeSells(positions, -delta);
       const pricedSells = [];
@@ -1457,7 +1463,18 @@ async function makerGridCycle({
   const minOrderNotionalUsd = 1.0;
   const dustNow = Date.now();
   for (const pos of positions) {
+    if (holdOnly) continue; // hold-only grids never market-sell inventory
+    if (pos.dustSkipped) continue;
     if (pos.units * pos.sellPrice >= minOrderNotionalUsd) continue;
+    if (pos.units * pos.sellPrice < 0.01) {
+      // Far below the DEX minimum; permanently skip so we stop retrying the
+      // "Input value is too low" dust-sell loop every cycle.
+      positions = positions.map(p => p.level === pos.level ? { ...p, dustSkipped: true } : p);
+      makerStore.log(`${token} 灰尘仓位 第${pos.level}格 价值 < $0.01，跳过清灰（不再重试）`, "info");
+      continue;
+    }
+    const dustUnitCost = pos.units > 0 ? Number(pos.costUsd || 0) / pos.units : 0;
+    if (dustUnitCost > 0 && pos.sellPrice < dustUnitCost) continue; // never dust-sell below cost
     if (dustNow - Number(pos.dustSellAt || 0) < 60000) continue;
     try {
       const dustExecutor = new AgenticWalletExecutor({
@@ -1503,8 +1520,12 @@ async function makerGridCycle({
   const levelBiasBps = firstLevel?.buyPrice && expectedL1 > 0
     ? Math.abs(expectedL1 / firstLevel.buyPrice - 1) * 10000
     : 0;
-  const needsReanchor = midDeviationBps > reanchorBps || levelBiasBps > reanchorBps;
-  if (needsReanchor && (positions.length === 0 || midDeviationBps > reanchorBps * 5)) {
+  // Re-anchor only when the grid is flat (no inventory) and not in hold-only
+  // mode: with positions resting, the sell side must stay tied to acquisition
+  // cost so held inventory is never dragged down to the current market price.
+  const needsReanchor = (midDeviationBps > reanchorBps || levelBiasBps > reanchorBps)
+    && positions.length === 0 && !holdOnly;
+  if (needsReanchor) {
     const oldMid = grid.mid;
     for (const ao of (grid.activeOrders || []).filter(o => o.side === "buy")) {
       try { await makerCancelOrder(ao.orderId); } catch { /* ignore */ }
@@ -1608,7 +1629,7 @@ async function makerGridCycle({
     }
   }
   const wanted = nextOrders({ levels: grid.levels, positions, activeOrders, buysPaused })
-    .filter(order => order.side !== "buy" || order.level <= armedCount);
+    .filter(order => order.side !== "buy" || (!holdOnly && order.level <= armedCount));
   // Shared USDT budget: each grid may only keep resting buy orders up to its
   // share (by deployPct) of budgetPct of available USDT, so deep simultaneous
   // dips cannot exceed the wallet balance.
@@ -1623,7 +1644,21 @@ async function makerGridCycle({
   let thisBuyNotional = grid.levels
     .filter(l => activeBuyLevels.has(l.level))
     .reduce((s, l) => s + Number(l.buyUsd || 0), 0);
+  // Hard no-loss guard: never rest a sell below the true acquisition cost
+  // (FIFO receipts) plus the configured profit. This protects held inventory
+  // even if the internal grid ledger drifts after re-anchors/rebuilds or a
+  // balance-delta misattribution, so below-cost market sells cannot happen.
+  const realLots = (makerStore.read().actualAccounting?.lotsByToken?.[token]) || [];
+  const realUnits = realLots.reduce((sum, lot) => sum + Number(lot.units || 0), 0);
+  const realUnitCost = realUnits > 0
+    ? realLots.reduce((sum, lot) => sum + Number(lot.costUsd || 0), 0) / realUnits
+    : 0;
+  const minSellPrice = realUnitCost > 0 ? realUnitCost * (1 + profitBps / 10000) : 0;
   for (const order of wanted) {
+    if (order.side === "sell" && minSellPrice > 0 && order.price < minSellPrice) {
+      makerStore.log(`${token} 持仓保护：止盈 $${order.price.toFixed(4)} 低于真实成本保护价 $${minSellPrice.toFixed(4)}，按保护价挂单`, "warn");
+      order.price = minSellPrice;
+    }
     if (order.side === "buy") {
       if (thisBuyNotional + Number(order.amountUsd || 0) > budgetUsd) {
         makerStore.log(`${token} 资金预算闸门：本格预算 $${budgetUsd.toFixed(0)}（已占用 $${thisBuyNotional.toFixed(0)}），跳过第${order.level}格买单`, "warn");
@@ -2181,6 +2216,7 @@ async function makerCycle(trigger = "timer") {
               tokenAddress: config.maker.extraGridAddress,
               gridKey: "gridBtc",
               deployPct: extraDeployPct,
+              holdOnly: config.maker.extraGridHoldOnly,
               count: config.maker.extraGridLevels,
               spacingBps: config.maker.extraGridSpacingBps,
               profitBps: config.maker.extraGridProfitBps,

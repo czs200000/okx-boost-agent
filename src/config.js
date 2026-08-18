@@ -179,6 +179,7 @@ export const config = Object.freeze({
     extraGridSpacingBps: number("MAKER_GRID_EXTRA_SPACING_BPS", 50),
     extraGridProfitBps: number("MAKER_GRID_EXTRA_PROFIT_BPS", 50),
     extraGridDeployPct: number("MAKER_GRID_EXTRA_DEPLOY_PCT", 20),
+    extraGridHoldOnly: bool("MAKER_GRID_EXTRA_HOLD_ONLY", true),
     extraGridFeeRate: number("MAKER_GRID_EXTRA_FEE_RATE", 0.0008),
     extraGridGasUsd: number("MAKER_GRID_EXTRA_GAS_USD", 0.01),
     extraGridBuySlippagePct: number("MAKER_GRID_EXTRA_BUY_SLIPPAGE_PCT", 0.30),
