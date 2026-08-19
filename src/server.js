@@ -1524,7 +1524,8 @@ async function makerGridCycle({
   // mode: with positions resting, the sell side must stay tied to acquisition
   // cost so held inventory is never dragged down to the current market price.
   const needsReanchor = (midDeviationBps > reanchorBps || levelBiasBps > reanchorBps)
-    && positions.length === 0 && !holdOnly;
+    && positions.length === 0 && !holdOnly
+    && Date.now() - Number(grid.lastReanchorAt || 0) > 60000;
   if (needsReanchor) {
     const oldMid = grid.mid;
     for (const ao of (grid.activeOrders || []).filter(o => o.side === "buy")) {
@@ -1541,7 +1542,8 @@ async function makerGridCycle({
       deployPct,
       mid: price,
       levels: rebuilt.levels,
-      activeOrders: (grid.activeOrders || []).filter(o => o.side === "sell")
+      activeOrders: (grid.activeOrders || []).filter(o => o.side === "sell"),
+      lastReanchorAt: Date.now()
     };
     makerStore.update({ [gridKey]: grid });
     makerStore.log(`${token} 网格锚点跟随：mid $${price.toFixed(2)}（原 $${oldMid.toFixed(2)}，买档偏差 ${levelBiasBps.toFixed(0)}bps）`, "info");
@@ -1595,7 +1597,11 @@ async function makerGridCycle({
     positions = reconcileActualBuy(positions, fill, profitBps);
   }
   makerStore.update({ [gridKey]: { ...grid, positions, lastPrice: price } });
-  const placedIds = new Set((makerStore.read().placedOrderIds || []).map(String));
+  // Per-grid placed-order ledger: two grids on the same token (e.g. the two
+  // OKB groups) must only ever orphan-clean their OWN resting orders. The
+  // global placedOrderIds spans all grids and would make each grid cancel the
+  // other group's orders as "orphans".
+  const placedIds = new Set((grid.placedOrderIds || []).map(String));
   let activeOrders = (grid.activeOrders || []).filter(ao => botTokenOrders.some(o => String(o.orderId) === String(ao.orderId)));
   // Clean up orphan orders for this token that are not tracked by the grid
   // (they can accumulate after network drops / failed state writes and would
@@ -1654,6 +1660,7 @@ async function makerGridCycle({
     ? realLots.reduce((sum, lot) => sum + Number(lot.costUsd || 0), 0) / realUnits
     : 0;
   const minSellPrice = realUnitCost > 0 ? realUnitCost * (1 + profitBps / 10000) : 0;
+  const gridPlacedIds = new Set(grid.placedOrderIds || []);
   for (const order of wanted) {
     if (order.side === "sell" && minSellPrice > 0 && order.price < minSellPrice) {
       makerStore.log(`${token} 持仓保护：止盈 $${order.price.toFixed(4)} 低于真实成本保护价 $${minSellPrice.toFixed(4)}，按保护价挂单`, "warn");
@@ -1691,12 +1698,13 @@ async function makerGridCycle({
         slippagePct: order.side === "buy" ? buySlippagePct : sellSlippagePct
       });
       activeOrders.push({ orderId, side: order.side, level: order.level, placedAt: Date.now(), price: order.price });
+      gridPlacedIds.add(orderId);
       makerStore.log(`${token} 网格${order.side === "buy" ? "买入" : "卖出"}挂单 第${order.level}格 @ $${order.price.toFixed(4)}`, "info");
     } catch (error) {
       makerStore.log(`${token} 网格挂单失败：${error.message}`, "warn");
     }
   }
-  makerStore.update({ [gridKey]: { ...grid, positions, activeOrders, lastPrice: price } });
+  makerStore.update({ [gridKey]: { ...grid, positions, activeOrders, lastPrice: price, placedOrderIds: [...gridPlacedIds].slice(-300) } });
 
   // 5. Circuit breakers.
   if (lossStreak >= config.maker.lossStreakLimit) {
