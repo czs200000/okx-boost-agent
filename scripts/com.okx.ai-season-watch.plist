@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.okx.ai-season-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/office/Library/Application Support/OKXBoostAgent/scripts/ai-season-watch.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/office/Library/Application Support/OKXBoostAgent/data/ai-season-watch.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/office/Library/Application Support/OKXBoostAgent/data/ai-season-watch.err.log</string>
+</dict>
+</plist>
